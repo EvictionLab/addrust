@@ -145,10 +145,45 @@ fn main() {
         }
         Some(Commands::List { what }) => match what {
             ListCommands::Rules => {
-                eprintln!("addrust list rules: coming soon");
+                let pipeline = Pipeline::from_config(&config);
+                for (i, rule) in pipeline.rule_summaries().iter().enumerate() {
+                    let status = if rule.enabled { " " } else { "x" };
+                    println!("{:>3}. [{}] {:30} {:12} {:?}", i + 1, status, rule.label, rule.group, rule.action);
+                }
             }
-            ListCommands::Tables { .. } => {
-                eprintln!("addrust list tables: coming soon");
+            ListCommands::Tables { name } => {
+                use addrust::tables::abbreviations::build_default_tables;
+
+                let tables = build_default_tables();
+                let tables = if config.dictionaries.is_empty() {
+                    tables
+                } else {
+                    tables.patch(&config.dictionaries)
+                };
+
+                match name {
+                    None => {
+                        for name in tables.table_names() {
+                            let table = tables.get(name).unwrap();
+                            println!("{:20} ({} entries)", name, table.entries.len());
+                        }
+                    }
+                    Some(ref name) => {
+                        match tables.get(name) {
+                            Some(table) => {
+                                println!("{} ({} entries):", name, table.entries.len());
+                                for entry in &table.entries {
+                                    println!("  {:20} -> {}", entry.short, entry.long);
+                                }
+                            }
+                            None => {
+                                eprintln!("Unknown table: {}", name);
+                                eprintln!("Available: {}", tables.table_names().join(", "));
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
             }
         },
         Some(Commands::Configure) => {

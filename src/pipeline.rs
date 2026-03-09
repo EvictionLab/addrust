@@ -105,6 +105,15 @@ pub struct PipelineConfig {
     pub disabled_groups: Vec<String>,
 }
 
+/// Summary of a rule for display purposes.
+#[derive(Debug)]
+pub struct RuleSummary {
+    pub label: String,
+    pub group: String,
+    pub action: Action,
+    pub enabled: bool,
+}
+
 /// The parsing pipeline — an ordered sequence of rules.
 pub struct Pipeline {
     rules: Vec<Rule>,
@@ -131,6 +140,16 @@ impl Pipeline {
         };
 
         Self::new(rules, &pipeline_config)
+    }
+
+    /// Get metadata about all rules for display purposes.
+    pub fn rule_summaries(&self) -> Vec<RuleSummary> {
+        self.rules.iter().map(|r| RuleSummary {
+            label: r.label.clone(),
+            group: r.group.clone(),
+            action: r.action,
+            enabled: r.enabled,
+        }).collect()
     }
 
     pub fn new(mut rules: Vec<Rule>, config: &PipelineConfig) -> Self {
