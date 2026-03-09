@@ -1,9 +1,11 @@
 pub mod address;
 pub mod config;
+pub mod init;
 pub mod ops;
 pub mod pipeline;
 pub mod prepare;
 pub mod tables;
+pub mod tui;
 
 use address::Address;
 use pipeline::Pipeline;
