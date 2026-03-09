@@ -163,7 +163,7 @@ fn main() {
                     let pipeline = Pipeline::from_config(&config);
                     for (i, rule) in pipeline.rule_summaries().iter().enumerate() {
                         let status = if rule.enabled { " " } else { "x" };
-                        println!("{:>3}. [{}] {:30} {:12} {:?}", i + 1, status, rule.label, rule.group, rule.action);
+                        println!("{:>3}. [{}] {:30} {:8} {}", i + 1, status, rule.label, format!("{:?}", rule.action), rule.pattern_template);
                     }
                 }
                 ListCommands::Tables { name } => {

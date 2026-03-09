@@ -55,6 +55,7 @@ struct RuleState {
     label: String,
     group: String,
     action_desc: String,
+    pattern_template: String,
     enabled: bool,
     default_enabled: bool,
 }
@@ -102,6 +103,7 @@ impl App {
                 label: current.label.clone(),
                 group: current.group.clone(),
                 action_desc: format!("{:?}", current.action),
+                pattern_template: current.pattern_template.clone(),
                 enabled: current.enabled,
                 default_enabled: default.enabled,
             })
@@ -630,8 +632,8 @@ fn render_rules(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                     },
                 ),
                 Span::styled(format!("{:30} ", r.label), style),
-                Span::styled(format!("{:12} ", r.group), Style::new().fg(Color::DarkGray)),
-                Span::styled(&r.action_desc, Style::new().fg(Color::DarkGray)),
+                Span::styled(format!("{:8} ", r.action_desc), Style::new().fg(Color::DarkGray)),
+                Span::styled(&r.pattern_template, Style::new().fg(Color::DarkGray)),
             ]))
         })
         .collect();

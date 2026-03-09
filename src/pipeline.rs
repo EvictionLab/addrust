@@ -24,6 +24,8 @@ pub struct Rule {
     pub label: String,
     pub group: String,
     pub pattern: Regex,
+    /// Human-readable pattern with table placeholders (e.g., `{common_suffix}` instead of expanded alternation).
+    pub pattern_template: String,
     pub action: Action,
     pub target: Option<Field>,
     /// Regex replacement for standardization (applied to extracted value or working string).
@@ -111,6 +113,7 @@ pub struct RuleSummary {
     pub label: String,
     pub group: String,
     pub action: Action,
+    pub pattern_template: String,
     pub enabled: bool,
 }
 
@@ -148,6 +151,7 @@ impl Pipeline {
             label: r.label.clone(),
             group: r.group.clone(),
             action: r.action,
+            pattern_template: r.pattern_template.clone(),
             enabled: r.enabled,
         }).collect()
     }
