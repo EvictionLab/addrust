@@ -17,7 +17,11 @@ pub struct AbbrTable {
 }
 
 impl AbbrTable {
-    pub fn new(entries: Vec<Abbr>) -> Self {
+    pub fn new(mut entries: Vec<Abbr>) -> Self {
+        // Deduplicate entries by (short, long) pair
+        let mut seen = std::collections::HashSet::new();
+        entries.retain(|e| seen.insert((e.short.clone(), e.long.clone())));
+
         let mut s2l = HashMap::new();
         let mut l2s = HashMap::new();
         for e in &entries {
@@ -301,9 +305,9 @@ fn build_all_suffixes() -> AbbrTable {
                 continue;
             }
 
-            // Handle PARKS/WALKS/SPURS → rename to plural form
-            let actual_short = if ["PARK", "WALK", "SPUR"].contains(&short)
-                && ["PARKS", "WALKS", "SPURS"].contains(&long)
+            // Handle plural forms → give them distinct short codes
+            let actual_short = if ["PARK", "WALK", "SPUR", "LOOP"].contains(&short)
+                && ["PARKS", "WALKS", "SPURS", "LOOPS"].contains(&long)
             {
                 format!("{}S", short)
             } else {
@@ -331,19 +335,25 @@ fn build_all_suffixes() -> AbbrTable {
 }
 
 fn build_common_suffixes() -> AbbrTable {
-    let common_longs = [
-        "DRIVE", "LANE", "AVENUE", "ROAD", "STREET", "CIRCLE", "COURT",
-        "PLACE", "WAY", "BOULEVARD", "STRAVENUE", "COVE", "LOOP",
-    ];
-
-    let all = build_all_suffixes();
-    let entries: Vec<Abbr> = all
-        .entries
-        .into_iter()
-        .filter(|e| common_longs.contains(&e.long.as_str()) || common_longs.contains(&e.short.as_str()))
-        .collect();
-
-    AbbrTable::new(entries)
+    // Common suffixes: USPS standard short → long form only.
+    // These are suffixes frequent enough to extract confidently
+    // (vs. words like CRESCENT that appear in street names).
+    // The regex uses all_values() so both short and long forms match.
+    AbbrTable::new(vec![
+        abbr("DR", "DRIVE"),
+        abbr("LN", "LANE"),
+        abbr("AVE", "AVENUE"),
+        abbr("RD", "ROAD"),
+        abbr("ST", "STREET"),
+        abbr("CIR", "CIRCLE"),
+        abbr("CT", "COURT"),
+        abbr("PL", "PLACE"),
+        abbr("WAY", "WAY"),
+        abbr("BLVD", "BOULEVARD"),
+        abbr("STRA", "STRAVENUE"),
+        abbr("CV", "COVE"),
+        abbr("LOOP", "LOOP"),
+    ])
 }
 
 /// Build the default abbreviation tables (non-static, for patching).
