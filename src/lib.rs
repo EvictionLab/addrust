@@ -8,10 +8,11 @@ pub mod tables;
 use address::Address;
 use pipeline::{Pipeline, PipelineConfig};
 use tables::build_rules;
+use tables::abbreviations::ABBR;
 
 /// Parse a single address string with default settings.
 pub fn parse(input: &str) -> Address {
-    let rules = build_rules();
+    let rules = build_rules(&ABBR);
     let config = PipelineConfig::default();
     let pipeline = Pipeline::new(rules, &config);
     pipeline.parse(input)
@@ -19,7 +20,7 @@ pub fn parse(input: &str) -> Address {
 
 /// Parse a batch of address strings (parallel).
 pub fn parse_batch(inputs: &[&str]) -> Vec<Address> {
-    let rules = build_rules();
+    let rules = build_rules(&ABBR);
     let config = PipelineConfig::default();
     let pipeline = Pipeline::new(rules, &config);
     pipeline.parse_batch(inputs)

@@ -140,6 +140,24 @@ impl Abbreviations {
     pub fn get(&self, table_type: &str) -> Option<&AbbrTable> {
         self.tables.get(table_type)
     }
+
+    /// Apply config overrides to matching tables, returning a new Abbreviations.
+    pub fn patch(&self, dict_overrides: &std::collections::HashMap<String, crate::config::DictOverrides>) -> Self {
+        let mut tables = self.tables.clone();
+        for (name, overrides) in dict_overrides {
+            if let Some(table) = tables.get(name) {
+                tables.insert(name.clone(), table.patch(overrides));
+            }
+        }
+        Abbreviations { tables }
+    }
+
+    /// List available table names.
+    pub fn table_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.tables.keys().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
 }
 
 // --- Static data definitions ---
@@ -326,6 +344,19 @@ fn build_common_suffixes() -> AbbrTable {
         .collect();
 
     AbbrTable::new(entries)
+}
+
+/// Build the default abbreviation tables (non-static, for patching).
+pub fn build_default_tables() -> Abbreviations {
+    let mut tables = HashMap::new();
+    tables.insert("direction".to_string(), build_directions());
+    tables.insert("unit_type".to_string(), build_unit_types());
+    tables.insert("unit_location".to_string(), build_unit_locations());
+    tables.insert("state".to_string(), build_states());
+    tables.insert("usps_suffix".to_string(), build_usps_suffixes());
+    tables.insert("all_suffix".to_string(), build_all_suffixes());
+    tables.insert("common_suffix".to_string(), build_common_suffixes());
+    Abbreviations { tables }
 }
 
 /// Global abbreviation tables, built once.
