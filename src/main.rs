@@ -37,7 +37,7 @@ enum Commands {
         #[command(subcommand)]
         what: ListCommands,
     },
-    /// Interactive pipeline editor (coming soon)
+    /// Interactive pipeline editor
     Configure,
 }
 
@@ -134,63 +134,83 @@ fn run_parse(config: &Config, format: &str, time: bool) {
 
 fn main() {
     let cli = Cli::parse();
-    let config = load_config(&cli.config);
 
     match cli.command {
         Some(Commands::Parse { format, time }) => {
+            let config = load_config(&cli.config);
             run_parse(&config, &format, time);
         }
         Some(Commands::Init) => {
-            eprintln!("addrust init: coming soon");
-        }
-        Some(Commands::List { what }) => match what {
-            ListCommands::Rules => {
-                let pipeline = Pipeline::from_config(&config);
-                for (i, rule) in pipeline.rule_summaries().iter().enumerate() {
-                    let status = if rule.enabled { " " } else { "x" };
-                    println!("{:>3}. [{}] {:30} {:12} {:?}", i + 1, status, rule.label, rule.group, rule.action);
+            let path = std::path::Path::new(".addrust.toml");
+            if path.exists() {
+                eprint!(".addrust.toml already exists. Overwrite? (y/N) ");
+                let _ = io::stderr().flush();
+                let mut answer = String::new();
+                io::stdin().read_line(&mut answer).unwrap();
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("Aborted.");
+                    std::process::exit(0);
                 }
             }
-            ListCommands::Tables { name } => {
-                use addrust::tables::abbreviations::build_default_tables;
-
-                let tables = build_default_tables();
-                let tables = if config.dictionaries.is_empty() {
-                    tables
-                } else {
-                    tables.patch(&config.dictionaries)
-                };
-
-                match name {
-                    None => {
-                        for name in tables.table_names() {
-                            let table = tables.get(name).unwrap();
-                            println!("{:20} ({} entries)", name, table.entries.len());
-                        }
+            let content = addrust::init::generate_default_config();
+            std::fs::write(path, content).unwrap();
+            println!("Created .addrust.toml");
+        }
+        Some(Commands::List { what }) => {
+            let config = load_config(&cli.config);
+            match what {
+                ListCommands::Rules => {
+                    let pipeline = Pipeline::from_config(&config);
+                    for (i, rule) in pipeline.rule_summaries().iter().enumerate() {
+                        let status = if rule.enabled { " " } else { "x" };
+                        println!("{:>3}. [{}] {:30} {:12} {:?}", i + 1, status, rule.label, rule.group, rule.action);
                     }
-                    Some(ref name) => {
-                        match tables.get(name) {
-                            Some(table) => {
-                                println!("{} ({} entries):", name, table.entries.len());
-                                for entry in &table.entries {
-                                    println!("  {:20} -> {}", entry.short, entry.long);
+                }
+                ListCommands::Tables { name } => {
+                    use addrust::tables::abbreviations::build_default_tables;
+
+                    let tables = build_default_tables();
+                    let tables = if config.dictionaries.is_empty() {
+                        tables
+                    } else {
+                        tables.patch(&config.dictionaries)
+                    };
+
+                    match name {
+                        None => {
+                            for name in tables.table_names() {
+                                let table = tables.get(name).unwrap();
+                                println!("{:20} ({} entries)", name, table.entries.len());
+                            }
+                        }
+                        Some(ref name) => {
+                            match tables.get(name) {
+                                Some(table) => {
+                                    println!("{} ({} entries):", name, table.entries.len());
+                                    for entry in &table.entries {
+                                        println!("  {:20} -> {}", entry.short, entry.long);
+                                    }
+                                }
+                                None => {
+                                    eprintln!("Unknown table: {}", name);
+                                    eprintln!("Available: {}", tables.table_names().join(", "));
+                                    std::process::exit(1);
                                 }
                             }
-                            None => {
-                                eprintln!("Unknown table: {}", name);
-                                eprintln!("Available: {}", tables.table_names().join(", "));
-                                std::process::exit(1);
-                            }
                         }
                     }
                 }
             }
-        },
+        }
         Some(Commands::Configure) => {
-            eprintln!("addrust configure: coming soon (interactive TUI)");
+            let config_path = cli.config.unwrap_or_else(|| PathBuf::from(".addrust.toml"));
+            if let Err(e) = addrust::tui::run(config_path) {
+                eprintln!("TUI error: {}", e);
+                std::process::exit(1);
+            }
         }
         None => {
-            // Backwards compat: bare `addrust` with stdin behaves like `parse`
+            let config = load_config(&cli.config);
             run_parse(&config, "clean", false);
         }
     }
