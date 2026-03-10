@@ -201,6 +201,47 @@ impl Pipeline {
         pipeline
     }
 
+    /// Build a step-based pipeline from a Config (file-based configuration).
+    pub fn from_steps_config(config: &crate::config::Config) -> Self {
+        use crate::step::{compile_steps, StepsDef};
+        use crate::tables::abbreviations::build_default_tables;
+
+        let tables = build_default_tables();
+        let tables = if config.dictionaries.is_empty() {
+            tables
+        } else {
+            tables.patch(&config.dictionaries)
+        };
+
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let mut defs: StepsDef = toml::from_str(toml_str)
+            .expect("Failed to parse default steps.toml");
+
+        // Apply pattern overrides from config
+        for def in &mut defs.step {
+            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
+                def.pattern = Some(override_pattern.clone());
+            }
+        }
+
+        let mut steps = compile_steps(&defs.step, &tables);
+
+        // Apply disabled list
+        for step in &mut steps {
+            if config.steps.disabled.contains(&step.label().to_string()) {
+                step.set_enabled(false);
+            }
+        }
+
+        Self {
+            rules: Vec::new(),
+            steps,
+            output: config.output.clone(),
+            tables,
+            use_steps: true,
+        }
+    }
+
     /// Build a pipeline using the step-based parse path with default tables and steps.
     pub fn from_steps_default() -> Self {
         use crate::tables::abbreviations::build_default_tables;
@@ -525,6 +566,18 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let addr = p.parse("42 W St James Pl");
         assert_eq!(addr.street_name.as_deref(), Some("SAINT JAMES"));
         assert_eq!(addr.suffix.as_deref(), Some("PLACE"));
+    }
+
+    #[test]
+    fn test_step_pipeline_from_config_disabled() {
+        let toml_str = r#"
+[steps]
+disabled = ["suffix_common", "suffix_all"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_steps_config(&config);
+        let addr = p.parse("123 Main St");
+        assert!(addr.suffix.is_none());
     }
 
     #[test]

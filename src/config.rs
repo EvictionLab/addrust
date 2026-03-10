@@ -58,9 +58,26 @@ fn is_short(f: &OutputFormat) -> bool { *f == OutputFormat::Short }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
+pub struct StepsConfig {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disabled: Vec<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub pattern_overrides: HashMap<String, String>,
+}
+
+impl StepsConfig {
+    pub fn is_empty(&self) -> bool {
+        self.disabled.is_empty() && self.pattern_overrides.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct Config {
     #[serde(skip_serializing_if = "RulesConfig::is_empty")]
     pub rules: RulesConfig,
+    #[serde(skip_serializing_if = "StepsConfig::is_empty")]
+    pub steps: StepsConfig,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub dictionaries: HashMap<String, DictOverrides>,
     #[serde(default, skip_serializing_if = "OutputConfig::is_default")]
