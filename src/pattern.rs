@@ -3,7 +3,7 @@
 pub enum PatternSegment {
     /// Literal regex text (not an alternation group).
     Literal(String),
-    /// A table placeholder like {common_suffix}.
+    /// A table placeholder like {suffix_common}.
     TableRef(String),
     /// An alternation group with individually toggleable alternatives.
     AlternationGroup {
@@ -238,10 +238,10 @@ mod tests {
 
     #[test]
     fn test_parse_table_ref() {
-        let segments = parse_pattern(r"(?<!^)\b({common_suffix})\s*$");
+        let segments = parse_pattern(r"(?<!^)\b({suffix_common})\s*$");
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0], PatternSegment::Literal(r"(?<!^)\b(".to_string()));
-        assert_eq!(segments[1], PatternSegment::TableRef("common_suffix".to_string()));
+        assert_eq!(segments[1], PatternSegment::TableRef("suffix_common".to_string()));
         assert_eq!(segments[2], PatternSegment::Literal(r")\s*$".to_string()));
     }
 
@@ -316,9 +316,9 @@ mod tests {
 
     #[test]
     fn test_rebuild_preserves_table_refs() {
-        let segments = parse_pattern(r"(?<!^)\b({common_suffix})\s*$");
+        let segments = parse_pattern(r"(?<!^)\b({suffix_common})\s*$");
         let rebuilt = rebuild_pattern(&segments);
-        assert_eq!(rebuilt, r"(?<!^)\b({common_suffix})\s*$");
+        assert_eq!(rebuilt, r"(?<!^)\b({suffix_common})\s*$");
     }
 
     #[test]

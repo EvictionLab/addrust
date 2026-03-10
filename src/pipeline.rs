@@ -24,7 +24,7 @@ pub struct Rule {
     pub label: String,
     pub group: String,
     pub pattern: Regex,
-    /// Human-readable pattern with table placeholders (e.g., `{common_suffix}` instead of expanded alternation).
+    /// Human-readable pattern with table placeholders (e.g., `{suffix_common}` instead of expanded alternation).
     pub pattern_template: String,
     pub action: Action,
     pub target: Option<Field>,
@@ -247,7 +247,7 @@ impl Pipeline {
 
         // Standardize suffix: normalize to USPS long form (STREET, AVENUE, etc.)
         if let Some(ref sfx) = state.fields.suffix {
-            if let Some(table) = ABBR.get("all_suffix") {
+            if let Some(table) = ABBR.get("suffix_all") {
                 if let Some(long) = table.to_long(sfx) {
                     state.fields.suffix = Some(long.to_string());
                 }

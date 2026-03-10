@@ -400,9 +400,9 @@ pub fn build_default_tables() -> Abbreviations {
     tables.insert("unit_type".to_string(), build_unit_types());
     tables.insert("unit_location".to_string(), build_unit_locations());
     tables.insert("state".to_string(), build_states());
-    tables.insert("usps_suffix".to_string(), build_usps_suffixes());
-    tables.insert("all_suffix".to_string(), build_all_suffixes());
-    tables.insert("common_suffix".to_string(), build_common_suffixes());
+    tables.insert("suffix_usps".to_string(), build_usps_suffixes());
+    tables.insert("suffix_all".to_string(), build_all_suffixes());
+    tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
     tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
     Abbreviations { tables }
@@ -415,9 +415,9 @@ pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(|| {
     tables.insert("unit_type".to_string(), build_unit_types());
     tables.insert("unit_location".to_string(), build_unit_locations());
     tables.insert("state".to_string(), build_states());
-    tables.insert("usps_suffix".to_string(), build_usps_suffixes());
-    tables.insert("all_suffix".to_string(), build_all_suffixes());
-    tables.insert("common_suffix".to_string(), build_common_suffixes());
+    tables.insert("suffix_usps".to_string(), build_usps_suffixes());
+    tables.insert("suffix_all".to_string(), build_all_suffixes());
+    tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
     tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
     Abbreviations { tables }

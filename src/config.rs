@@ -181,7 +181,7 @@ unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
         let mut config = Config::default();
         config.rules.pattern_overrides.insert(
             "suffix_common".to_string(),
-            r"(?<!^)\b({common_suffix})\s*$".to_string(),
+            r"(?<!^)\b({suffix_common})\s*$".to_string(),
         );
         let toml_str = config.to_toml();
         assert!(toml_str.contains("[rules.pattern_overrides]"));

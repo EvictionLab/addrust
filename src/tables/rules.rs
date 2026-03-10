@@ -158,10 +158,10 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_unstick_suffix_unit",
         "pre_check",
-        r"\b({common_suffix})({unit_type})\b",
+        r"\b({suffix_common})({unit_type})\b",
         Action::Change,
         None,
-        Some((r"({common_suffix})({unit_type})", "$1 $2")),
+        Some((r"({suffix_common})({unit_type})", "$1 $2")),
         false,
     ));
 
@@ -171,11 +171,11 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_st_to_saint",
         "pre_check",
-        r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{all_suffix})\b)([A-Z]{3,20})",
+        r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{suffix_all})\b)([A-Z]{3,20})",
         Action::Change,
         None,
         Some((
-            r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{all_suffix})\b)([A-Z]{3,20})",
+            r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{suffix_all})\b)([A-Z]{3,20})",
             "${1}SAINT $2",
         )),
         false,
@@ -283,7 +283,7 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "suffix_common",
         "suffix",
-        r"(?<!^)\b({common_suffix})\s*$",
+        r"(?<!^)\b({suffix_common})\s*$",
         Action::Extract,
         Some(Field::Suffix),
         None,
@@ -293,7 +293,7 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "suffix_all",
         "suffix",
-        r"(?<!^)\b({all_suffix})\s*$",
+        r"(?<!^)\b({suffix_all})\s*$",
         Action::Extract,
         Some(Field::Suffix),
         None,
