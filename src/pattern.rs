@@ -94,7 +94,7 @@ fn find_table_ref(chars: &[char], start: usize) -> Option<usize> {
     while i < chars.len() {
         if chars[i] == '}' {
             let name: String = chars[start + 1..i].iter().collect();
-            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 return Some(i);
             }
             return None;
@@ -319,6 +319,15 @@ mod tests {
         let segments = parse_pattern(r"(?<!^)\b({common_suffix})\s*$");
         let rebuilt = rebuild_pattern(&segments);
         assert_eq!(rebuilt, r"(?<!^)\b({common_suffix})\s*$");
+    }
+
+    #[test]
+    fn test_parse_table_ref_with_accessor() {
+        let segments = parse_pattern(r"\b({street_name_abbr$short})\b");
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0], PatternSegment::Literal(r"\b(".to_string()));
+        assert_eq!(segments[1], PatternSegment::TableRef("street_name_abbr$short".to_string()));
+        assert_eq!(segments[2], PatternSegment::Literal(r")\b".to_string()));
     }
 
     #[test]
