@@ -7,12 +7,9 @@ use duckdb::Connection;
 
 /// Validate that the input table and column exist in the database.
 /// Returns Ok(()) or an error message listing available tables/columns.
-pub fn validate_input(db_path: &str, table: &str, column: &str) -> Result<(), String> {
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-
+pub fn validate_input(conn: &Connection, table: &str, column: &str) -> Result<(), String> {
     // Check table exists
-    let tables = list_tables(&conn)?;
+    let tables = list_tables(conn)?;
     if !tables.iter().any(|t| t.eq_ignore_ascii_case(table)) {
         return Err(format!(
             "Table '{}' not found. Available tables: {}",
@@ -22,7 +19,7 @@ pub fn validate_input(db_path: &str, table: &str, column: &str) -> Result<(), St
     }
 
     // Check column exists
-    let columns = list_columns(&conn, table)?;
+    let columns = list_columns(conn, table)?;
     if !columns.iter().any(|c| c.eq_ignore_ascii_case(column)) {
         return Err(format!(
             "Column '{}' not found in '{}'. Available columns: {}",
@@ -36,11 +33,8 @@ pub fn validate_input(db_path: &str, table: &str, column: &str) -> Result<(), St
 }
 
 /// Validate that the output table does not already exist.
-pub fn validate_output(db_path: &str, table: &str) -> Result<(), String> {
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-
-    let tables = list_tables(&conn)?;
+pub fn validate_output(conn: &Connection, table: &str) -> Result<(), String> {
+    let tables = list_tables(conn)?;
     if tables.iter().any(|t| t.eq_ignore_ascii_case(table)) {
         return Err(format!(
             "Output table '{}' already exists. Drop it first or choose a different name.",
@@ -64,22 +58,17 @@ fn list_tables(conn: &Connection) -> Result<Vec<String>, String> {
 
 /// Read address values from the specified table and column.
 /// Skips NULL values.
-pub fn read_addresses(db_path: &str, table: &str, column: &str) -> Result<Vec<String>, String> {
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-
+pub fn read_addresses(conn: &Connection, table: &str, column: &str) -> Result<Vec<String>, String> {
     let sql = format!(
         "SELECT \"{col}\" FROM \"{tbl}\" WHERE \"{col}\" IS NOT NULL",
         col = column,
         tbl = table,
     );
 
-    let mut stmt = conn
-        .prepare(&sql)
+    let mut stmt = conn.prepare(&sql)
         .map_err(|e| format!("Failed to query table: {e}"))?;
 
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))
         .map_err(|e| format!("Failed to read addresses: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -90,14 +79,11 @@ pub fn read_addresses(db_path: &str, table: &str, column: &str) -> Result<Vec<St
 /// Sorts by street_name before inserting for better columnar compression.
 /// Uses DuckDB's Appender API for bulk insert performance.
 pub fn write_parsed(
-    db_path: &str,
+    conn: &Connection,
     output_table: &str,
     originals: &[String],
     parsed: &[Address],
 ) -> Result<(), String> {
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
-
     let create_sql = format!(
         "CREATE TABLE \"{}\" (
             address VARCHAR,
@@ -160,15 +146,18 @@ pub fn run_duckdb(
     column: &str,
     overwrite: bool,
 ) -> Result<(), String> {
-    validate_input(db_path, input_table, column)?;
+    let conn = Connection::open(db_path)
+        .map_err(|e| format!("Failed to open database: {e}"))?;
+
+    validate_input(&conn, input_table, column)?;
 
     if overwrite {
-        drop_table_if_exists(db_path, output_table)?;
+        drop_table_if_exists(&conn, output_table)?;
     } else {
-        validate_output(db_path, output_table)?;
+        validate_output(&conn, output_table)?;
     }
 
-    let addresses = read_addresses(db_path, input_table, column)?;
+    let addresses = read_addresses(&conn, input_table, column)?;
     eprintln!("Read {} addresses from '{}'", addresses.len(), input_table);
 
     let pipeline = Pipeline::from_config(config);
@@ -176,15 +165,13 @@ pub fn run_duckdb(
     let parsed = pipeline.parse_batch(&refs);
     eprintln!("Parsed {} addresses", parsed.len());
 
-    write_parsed(db_path, output_table, &addresses, &parsed)?;
+    write_parsed(&conn, output_table, &addresses, &parsed)?;
     eprintln!("Wrote results to '{}'", output_table);
 
     Ok(())
 }
 
-fn drop_table_if_exists(db_path: &str, table: &str) -> Result<(), String> {
-    let conn =
-        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+fn drop_table_if_exists(conn: &Connection, table: &str) -> Result<(), String> {
     conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{}\"", table))
         .map_err(|e| format!("Failed to drop table '{}': {e}", table))
 }
