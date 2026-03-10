@@ -74,7 +74,6 @@ struct StepState {
     default_enabled: bool,
 }
 
-
 /// Full TUI application state.
 struct App {
     /// Path to save config to.
@@ -977,7 +976,7 @@ fn render(frame: &mut Frame, app: &mut App) {
         format!(" ↑↓: move | Enter: confirm | Esc: cancel{}", dirty_indicator)
     } else {
         format!(
-            " Tab: switch | j/k: navigate | Space: toggle | m: move | Enter: edit | s: save | q: quit{}",
+            " Tab: switch | j/k: navigate | Space: toggle | m: move | a: add | d: delete | Enter: edit | s: save | q: quit{}",
             dirty_indicator
         )
     };
