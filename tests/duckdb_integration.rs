@@ -194,3 +194,60 @@ fn test_run_duckdb_output_table_already_exists() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("already exists"));
 }
+
+#[test]
+fn test_end_to_end_with_varied_addresses() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.duckdb").to_str().unwrap().to_string();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE parcels (address VARCHAR);
+         INSERT INTO parcels VALUES ('100 N BROADWAY STE 200');
+         INSERT INTO parcels VALUES ('PO BOX 555');
+         INSERT INTO parcels VALUES ('42 W ELM ST APT 3B');",
+    )
+    .unwrap();
+    drop(conn);
+
+    let config = Config::default();
+    addrust::duckdb_io::run_duckdb(&config, &path, "parcels", "parcels_parsed", "address")
+        .unwrap();
+
+    let conn = Connection::open(&path).unwrap();
+
+    // Check all rows made it
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM parcels_parsed", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
+
+    // Check original address preserved
+    let orig: String = conn
+        .query_row(
+            "SELECT address FROM parcels_parsed WHERE street_number = '100'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(orig, "100 N BROADWAY STE 200");
+
+    // Check pre_direction parsed
+    let pre_dir: String = conn
+        .query_row(
+            "SELECT pre_direction FROM parcels_parsed WHERE street_number = '100'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pre_dir, "N");
+
+    // Check PO Box row has po_box filled
+    let po: String = conn
+        .query_row(
+            "SELECT po_box FROM parcels_parsed WHERE address = 'PO BOX 555'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(po, "PO BOX 555");
+}
