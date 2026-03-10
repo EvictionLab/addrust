@@ -1,136 +1,9 @@
 use fancy_regex::Regex;
 
-use crate::address::{Address, AddressState, Field};
-use crate::config::OutputFormat;
-use crate::ops::{extract_remove, extract_replace, none_if_empty, replace_pattern, squish};
+use crate::address::{Address, AddressState};
+use crate::ops::squish;
 use crate::prepare;
-use crate::tables::abbreviations::{AbbrTable, Abbreviations};
-
-/// What a rule does when it matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    /// Extract into target field, remove from working string.
-    Extract,
-    /// Extract into target field, leave `<label>` placeholder in working string.
-    Replace,
-    /// Modify the working string in place (no extraction).
-    Change,
-    /// Add label to warnings, don't modify.
-    Warn,
-}
-
-/// A single pipeline rule — one row of the data dictionary.
-#[derive(Debug)]
-pub struct Rule {
-    pub label: String,
-    pub group: String,
-    pub pattern: Regex,
-    /// Human-readable pattern with table placeholders (e.g., `{suffix_common}` instead of expanded alternation).
-    pub pattern_template: String,
-    pub action: Action,
-    pub target: Option<Field>,
-    /// Regex replacement for standardization (applied to extracted value or working string).
-    pub standardize: Option<(Regex, String)>,
-    /// Table-driven standardization: pairs of (match_regex, replacement_string).
-    /// Used when a single rule needs to replace multiple different matched values.
-    pub standardize_pairs: Vec<(Regex, String)>,
-    /// If true, skip this rule when the target field is already filled.
-    pub skip_if_filled: bool,
-    pub enabled: bool,
-}
-
-/// Apply a single rule to an address state.
-fn apply_rule(state: &mut AddressState, rule: &Rule) {
-    if !rule.enabled {
-        return;
-    }
-
-    // Skip if target already filled (the reduce2 early-exit)
-    if rule.skip_if_filled {
-        if let Some(field) = rule.target {
-            if state.fields.field(field).is_some() {
-                return;
-            }
-        }
-    }
-
-    // Check if pattern matches
-    if !rule.pattern.is_match(&state.working).unwrap_or(false) {
-        return;
-    }
-
-    match rule.action {
-        Action::Extract => {
-            let extracted = extract_remove(&mut state.working, &rule.pattern);
-            if let (Some(mut val), Some(field)) = (extracted, rule.target) {
-                if let Some((ref match_re, ref replacement)) = rule.standardize {
-                    replace_pattern(&mut val, match_re, replacement);
-                }
-                #[cfg(test)]
-                eprintln!("[EXTRACT {}] {:?} → field {:?}, remaining {:?}", rule.label, val, field, state.working);
-                *state.fields.field_mut(field) = none_if_empty(val);
-            }
-        }
-        Action::Replace => {
-            let extracted = extract_replace(&mut state.working, &rule.pattern, &rule.label);
-            if let (Some(mut val), Some(field)) = (extracted, rule.target) {
-                if let Some((ref match_re, ref replacement)) = rule.standardize {
-                    replace_pattern(&mut val, match_re, replacement);
-                }
-                *state.fields.field_mut(field) = none_if_empty(val);
-            }
-        }
-        Action::Change => {
-            if !rule.standardize_pairs.is_empty() {
-                #[cfg(test)]
-                let before = state.working.clone();
-                for (match_re, replacement) in &rule.standardize_pairs {
-                    replace_pattern(&mut state.working, match_re, replacement);
-                }
-                squish(&mut state.working);
-                #[cfg(test)]
-                if before != state.working {
-                    eprintln!("[CHANGE {}] {:?} → {:?}", rule.label, before, state.working);
-                }
-            } else if let Some((ref match_re, ref replacement)) = rule.standardize {
-                #[cfg(test)]
-                let before = state.working.clone();
-                replace_pattern(&mut state.working, match_re, replacement);
-                squish(&mut state.working);
-                #[cfg(test)]
-                if before != state.working {
-                    eprintln!("[CHANGE {}] {:?} → {:?}", rule.label, before, state.working);
-                }
-            }
-        }
-        Action::Warn => {
-            state.fields.warnings.push(rule.label.clone());
-            // For NA-type warnings, clear the working string
-            if rule.label.contains("na") {
-                state.working.clear();
-            }
-        }
-    }
-}
-
-/// Configuration for which rules are enabled.
-#[derive(Debug, Clone, Default)]
-pub struct PipelineConfig {
-    /// Disable specific rules by label.
-    pub disabled_rules: Vec<String>,
-    /// Disable entire groups.
-    pub disabled_groups: Vec<String>,
-}
-
-/// Summary of a rule for display purposes.
-#[derive(Debug)]
-pub struct RuleSummary {
-    pub label: String,
-    pub group: String,
-    pub action: Action,
-    pub pattern_template: String,
-    pub enabled: bool,
-}
+use crate::tables::abbreviations::Abbreviations;
 
 /// Summary of a step for display purposes.
 #[derive(Debug)]
@@ -141,34 +14,9 @@ pub struct StepSummary {
     pub enabled: bool,
 }
 
-/// Standardize a value using the two-step canonicalize→format flow.
-///
-/// 1. Canonicalize: look up the value in `matching_table` to get the short form.
-/// 2. Format: based on preference, keep short or expand to long via `canonical_table`.
-fn standardize_value(
-    value: &str,
-    matching_table: &AbbrTable,
-    canonical_table: &AbbrTable,
-    format: OutputFormat,
-) -> String {
-    // Step 1: Canonicalize to short form
-    let short = matching_table.to_short(value).unwrap_or(value);
-
-    // Step 2: Format based on preference
-    match format {
-        OutputFormat::Short => short.to_string(),
-        OutputFormat::Long => canonical_table
-            .to_long(short)
-            .unwrap_or(short)
-            .to_string(),
-    }
-}
-
-/// The parsing pipeline — an ordered sequence of rules (or steps).
+/// The parsing pipeline — an ordered sequence of steps.
 pub struct Pipeline {
-    rules: Vec<Rule>,
     steps: Vec<crate::step::Step>,
-    use_steps: bool,
     output: crate::config::OutputConfig,
     tables: Abbreviations,
 }
@@ -212,11 +60,9 @@ impl Pipeline {
         }
 
         Self {
-            rules: Vec::new(),
             steps,
             output: config.output.clone(),
             tables,
-            use_steps: true,
         }
     }
 
@@ -232,23 +78,10 @@ impl Pipeline {
         let steps = compile_steps(&defs.step, &tables);
 
         Self {
-            rules: Vec::new(),
             steps,
-            use_steps: true,
             output: crate::config::OutputConfig::default(),
             tables,
         }
-    }
-
-    /// Get metadata about all rules for display purposes.
-    pub fn rule_summaries(&self) -> Vec<RuleSummary> {
-        self.rules.iter().map(|r| RuleSummary {
-            label: r.label.clone(),
-            group: r.group.clone(),
-            action: r.action,
-            pattern_template: r.pattern_template.clone(),
-            enabled: r.enabled,
-        }).collect()
     }
 
     /// Get metadata about all steps for display purposes.
@@ -259,26 +92,6 @@ impl Pipeline {
             pattern_template: s.pattern_template().map(|p| p.to_string()),
             enabled: s.enabled(),
         }).collect()
-    }
-
-    pub fn new(mut rules: Vec<Rule>, config: &PipelineConfig) -> Self {
-        use crate::tables::abbreviations::ABBR;
-
-        // Apply config: disable rules by label or group
-        for rule in &mut rules {
-            if config.disabled_rules.contains(&rule.label)
-                || config.disabled_groups.contains(&rule.group)
-            {
-                rule.enabled = false;
-            }
-        }
-        Self {
-            rules,
-            steps: Vec::new(),
-            use_steps: false,
-            output: crate::config::OutputConfig::default(),
-            tables: ABBR.clone(),
-        }
     }
 
     /// Parse a single address string.
@@ -299,15 +112,8 @@ impl Pipeline {
 
         let mut state = AddressState::new_from_prepared(prepared);
 
-        // Apply steps or rules depending on pipeline mode
-        if self.use_steps {
-            for step in &self.steps {
-                crate::step::apply_step(&mut state, step, &self.tables, &self.output);
-            }
-        } else {
-            for rule in &self.rules {
-                apply_rule(&mut state, rule);
-            }
+        for step in &self.steps {
+            crate::step::apply_step(&mut state, step, &self.tables, &self.output);
         }
 
         // Finalize: whatever remains in working string becomes street_name
@@ -322,7 +128,8 @@ impl Pipeline {
         inputs.par_iter().map(|input| self.parse(input)).collect()
     }
 
-    /// After all rules, assign remaining working string to street_name.
+    /// After all steps, assign remaining working string to street_name
+    /// and perform final cleanup.
     fn finalize(&self, state: &mut AddressState) {
         // Remove any leftover placeholder tags
         let re_tags = Regex::new(r"<[a-z0-9_]+>").unwrap();
@@ -334,49 +141,10 @@ impl Pipeline {
             state.fields.street_name = Some(remaining);
         }
 
-        // Standardize directions
-        if let Some(ref dir) = state.fields.pre_direction {
-            if let Some(table) = self.tables.get("direction") {
-                state.fields.pre_direction = Some(
-                    standardize_value(dir, table, table, self.output.direction)
-                );
-            }
-        }
-        if let Some(ref dir) = state.fields.post_direction {
-            if let Some(table) = self.tables.get("direction") {
-                state.fields.post_direction = Some(
-                    standardize_value(dir, table, table, self.output.direction)
-                );
-            }
-        }
-
-        // Standardize suffix: canonicalize via suffix_all, format via suffix_usps
-        if let Some(ref sfx) = state.fields.suffix {
-            let matching = self.tables.get("suffix_all");
-            let canonical = self.tables.get("suffix_usps");
-            if let (Some(m), Some(c)) = (matching, canonical) {
-                state.fields.suffix = Some(
-                    standardize_value(sfx, m, c, self.output.suffix)
-                );
-            }
-        }
-
         // Clean up unit: strip leading # and whitespace
         if let Some(ref u) = state.fields.unit {
             let cleaned = u.trim_start_matches('#').trim().to_string();
             state.fields.unit = if cleaned.is_empty() { None } else { Some(cleaned) };
-        }
-
-        // Standardize unit if it's a unit location value
-        if let Some(ref unit) = state.fields.unit {
-            if let Some(table) = self.tables.get("unit_location") {
-                // Only standardize if the value is recognized as a unit location
-                if table.to_short(unit).is_some() || table.to_long(unit).is_some() {
-                    state.fields.unit = Some(
-                        standardize_value(unit, table, table, self.output.unit_location)
-                    );
-                }
-            }
         }
 
         // If no street number but unit exists, promote unit to street number
@@ -491,8 +259,6 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let addr = p.parse("123 N Main St");
         assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
     }
-
-    // --- Step-based pipeline tests ---
 
     #[test]
     fn test_step_pipeline_basic() {

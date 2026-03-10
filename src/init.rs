@@ -1,29 +1,30 @@
 use crate::pipeline::Pipeline;
 use crate::tables::abbreviations::build_default_tables;
 
-/// Generate a default .addrust.toml content string with all rules and tables.
+/// Generate a default .addrust.toml content string with all steps and tables.
 pub fn generate_default_config() -> String {
     let mut out = String::new();
 
     out.push_str("# addrust pipeline configuration\n");
     out.push_str("# Uncomment and edit to customize parsing behavior.\n\n");
 
-    // Rules section
-    out.push_str("[rules]\n");
-    out.push_str("# Disable individual rules by label:\n");
+    // Steps section
+    out.push_str("[steps]\n");
+    out.push_str("# Disable individual steps by label:\n");
     out.push_str("# disabled = []\n");
     out.push_str("#\n");
-    out.push_str("# Disable entire groups:\n");
-    out.push_str("# disabled_groups = []\n");
-    out.push_str("#\n");
-    out.push_str("# Available rules (in pipeline order):\n");
+    out.push_str("# Available steps (in pipeline order):\n");
 
     let pipeline = Pipeline::default();
-    for rule in pipeline.rule_summaries() {
+    for step in pipeline.step_summaries() {
+        let template = step.pattern_template.as_deref().unwrap_or("");
         out.push_str(&format!(
-            "#   {:30} (group: {}, action: {:?})\n",
-            rule.label, rule.group, rule.action
+            "#   {:30} (type: {})\n",
+            step.label, step.step_type
         ));
+        if !template.is_empty() {
+            out.push_str(&format!("#     pattern: {}\n", template));
+        }
     }
 
     out.push('\n');

@@ -63,7 +63,7 @@ enum EntryStatus {
     Overridden,
 }
 
-/// A rule with its original and current enabled state.
+/// A rule/step with its original and current enabled state.
 #[derive(Debug, Clone)]
 struct RuleState {
     label: String,
@@ -72,6 +72,22 @@ struct RuleState {
     pattern_template: String,
     enabled: bool,
     default_enabled: bool,
+}
+
+impl RuleState {
+    fn from_step_summaries(
+        current: &crate::pipeline::StepSummary,
+        default: &crate::pipeline::StepSummary,
+    ) -> Self {
+        Self {
+            label: current.label.clone(),
+            group: current.step_type.clone(),
+            action_desc: current.step_type.clone(),
+            pattern_template: current.pattern_template.clone().unwrap_or_default(),
+            enabled: current.enabled,
+            default_enabled: default.enabled,
+        }
+    }
 }
 
 /// Full TUI application state.
@@ -119,22 +135,15 @@ impl App {
         let default_tables = build_default_tables();
         let pipeline = Pipeline::from_config(&config);
 
-        // Build rule states
+        // Build rule states from step summaries
         let default_pipeline = Pipeline::default();
-        let default_summaries = default_pipeline.rule_summaries();
-        let config_summaries = pipeline.rule_summaries();
+        let default_summaries = default_pipeline.step_summaries();
+        let config_summaries = pipeline.step_summaries();
 
         let rules: Vec<RuleState> = config_summaries
             .iter()
             .zip(default_summaries.iter())
-            .map(|(current, default)| RuleState {
-                label: current.label.clone(),
-                group: current.group.clone(),
-                action_desc: format!("{:?}", current.action),
-                pattern_template: current.pattern_template.clone(),
-                enabled: current.enabled,
-                default_enabled: default.enabled,
-            })
+            .map(|(current, default)| RuleState::from_step_summaries(current, default))
             .collect();
 
         let mut rules_list_state = ListState::default();
@@ -280,23 +289,22 @@ impl App {
     fn to_config(&self) -> Config {
         let mut config = Config::default();
 
-        // Rules: collect individually disabled labels
+        // Steps: collect individually disabled labels
         let disabled: Vec<String> = self
             .rules
             .iter()
             .filter(|r| !r.enabled && r.default_enabled)
             .map(|r| r.label.clone())
             .collect();
-        config.rules.disabled = disabled;
-        // Per-rule disabled for simplicity; no group-level collapsing
-        config.rules.disabled_groups = vec![];
+        config.steps.disabled = disabled;
 
         // Pattern overrides: collect modified templates
         let default_pipeline = Pipeline::default();
-        let default_summaries = default_pipeline.rule_summaries();
+        let default_summaries = default_pipeline.step_summaries();
         for (rule, default) in self.rules.iter().zip(default_summaries.iter()) {
-            if rule.pattern_template != default.pattern_template {
-                config.rules.pattern_overrides.insert(
+            let default_template = default.pattern_template.as_deref().unwrap_or("");
+            if rule.pattern_template != default_template {
+                config.steps.pattern_overrides.insert(
                     rule.label.clone(),
                     rule.pattern_template.clone(),
                 );
@@ -1251,7 +1259,7 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 /// Validate a pattern template by expanding table placeholders and compiling.
 fn validate_pattern_template(template: &str) -> Result<(), String> {
     let tables = build_default_tables();
-    let expanded = crate::tables::rules::expand_template(template, &tables);
+    let expanded = crate::step::expand_template(template, &tables);
     fancy_regex::Regex::new(&expanded)
         .map(|_| ())
         .map_err(|e| format!("{}", e))
@@ -1370,7 +1378,7 @@ mod tests {
     fn test_to_config_no_changes() {
         let app = App::new(PathBuf::from("nonexistent.toml"));
         let config = app.to_config();
-        assert!(config.rules.disabled.is_empty());
+        assert!(config.steps.disabled.is_empty());
         assert!(config.dictionaries.is_empty());
     }
 
@@ -1381,7 +1389,7 @@ mod tests {
         if !app.rules.is_empty() {
             app.rules[0].enabled = false;
             let config = app.to_config();
-            assert!(config.rules.disabled.contains(&app.rules[0].label));
+            assert!(config.steps.disabled.contains(&app.rules[0].label));
         }
     }
 
@@ -1423,16 +1431,16 @@ mod tests {
             let original = app.rules[0].pattern_template.clone();
             app.rules[0].pattern_template = "MODIFIED_PATTERN".to_string();
             let config = app.to_config();
-            assert!(config.rules.pattern_overrides.contains_key(&app.rules[0].label));
+            assert!(config.steps.pattern_overrides.contains_key(&app.rules[0].label));
             assert_eq!(
-                config.rules.pattern_overrides.get(&app.rules[0].label).unwrap(),
+                config.steps.pattern_overrides.get(&app.rules[0].label).unwrap(),
                 "MODIFIED_PATTERN"
             );
 
             // Restore to default — should NOT appear in overrides
             app.rules[0].pattern_template = original;
             let config = app.to_config();
-            assert!(!config.rules.pattern_overrides.contains_key(&app.rules[0].label));
+            assert!(!config.steps.pattern_overrides.contains_key(&app.rules[0].label));
         }
     }
 
