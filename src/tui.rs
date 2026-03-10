@@ -16,7 +16,7 @@ use crate::tables::abbreviations::build_default_tables;
 /// Which top-level tab is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
-    Rules,
+    Steps,
     Dictionaries,
     Output,
 }
@@ -31,7 +31,7 @@ enum InputMode {
     AddLong(String, String),
     /// Editing an existing entry's long form: (index, current_text).
     EditLong(usize, String),
-    /// Editing a rule's pattern template: (text, cursor position, optional validation error).
+    /// Editing a step's pattern template: (text, cursor position, optional validation error).
     EditPattern(String, usize, Option<String>),
 }
 
@@ -63,9 +63,9 @@ enum EntryStatus {
     Overridden,
 }
 
-/// A rule/step with its original and current enabled state.
+/// A step with its original and current enabled state.
 #[derive(Debug, Clone)]
-struct RuleState {
+struct StepState {
     label: String,
     group: String,
     action_desc: String,
@@ -74,7 +74,7 @@ struct RuleState {
     default_enabled: bool,
 }
 
-impl RuleState {
+impl StepState {
     fn from_step_summaries(
         current: &crate::pipeline::StepSummary,
         default: &crate::pipeline::StepSummary,
@@ -103,18 +103,18 @@ struct App {
     active_tab: Tab,
 
     // -- Rules tab --
-    rules: Vec<RuleState>,
-    rules_list_state: ListState,
+    steps: Vec<StepState>,
+    steps_list_state: ListState,
 
-    // -- Rule detail view --
-    /// If Some, we're viewing/editing a rule's detail (index into rules vec).
-    rule_detail_index: Option<usize>,
-    /// Parsed pattern segments for the rule being viewed.
-    rule_detail_segments: Vec<PatternSegment>,
+    // -- Step detail view --
+    /// If Some, we're viewing/editing a step's detail (index into steps vec).
+    step_detail_index: Option<usize>,
+    /// Parsed pattern segments for the step being viewed.
+    step_detail_segments: Vec<PatternSegment>,
     /// Which segment is selected (only alternation groups are selectable).
-    rule_detail_selected: usize,
+    step_detail_selected: usize,
     /// If viewing inside an alternation group, which alternative is selected.
-    rule_detail_alt_selected: Option<usize>,
+    step_detail_alt_selected: Option<usize>,
 
     // -- Dictionaries tab --
     table_names: Vec<String>,
@@ -135,20 +135,20 @@ impl App {
         let default_tables = build_default_tables();
         let pipeline = Pipeline::from_config(&config);
 
-        // Build rule states from step summaries
+        // Build step states from step summaries
         let default_pipeline = Pipeline::default();
         let default_summaries = default_pipeline.step_summaries();
         let config_summaries = pipeline.step_summaries();
 
-        let rules: Vec<RuleState> = config_summaries
+        let steps: Vec<StepState> = config_summaries
             .iter()
             .zip(default_summaries.iter())
-            .map(|(current, default)| RuleState::from_step_summaries(current, default))
+            .map(|(current, default)| StepState::from_step_summaries(current, default))
             .collect();
 
-        let mut rules_list_state = ListState::default();
-        if !rules.is_empty() {
-            rules_list_state.select(Some(0));
+        let mut steps_list_state = ListState::default();
+        if !steps.is_empty() {
+            steps_list_state.select(Some(0));
         }
 
         // Build dictionary states
@@ -268,13 +268,13 @@ impl App {
             config_path,
             dirty: false,
             show_quit_prompt: false,
-            active_tab: Tab::Rules,
-            rules,
-            rules_list_state,
-            rule_detail_index: None,
-            rule_detail_segments: Vec::new(),
-            rule_detail_selected: 0,
-            rule_detail_alt_selected: None,
+            active_tab: Tab::Steps,
+            steps,
+            steps_list_state,
+            step_detail_index: None,
+            step_detail_segments: Vec::new(),
+            step_detail_selected: 0,
+            step_detail_alt_selected: None,
             table_names,
             dict_tab_index: 0,
             dict_entries,
@@ -291,7 +291,7 @@ impl App {
 
         // Steps: collect individually disabled labels
         let disabled: Vec<String> = self
-            .rules
+            .steps
             .iter()
             .filter(|r| !r.enabled && r.default_enabled)
             .map(|r| r.label.clone())
@@ -301,12 +301,12 @@ impl App {
         // Pattern overrides: collect modified templates
         let default_pipeline = Pipeline::default();
         let default_summaries = default_pipeline.step_summaries();
-        for (rule, default) in self.rules.iter().zip(default_summaries.iter()) {
+        for (step, default) in self.steps.iter().zip(default_summaries.iter()) {
             let default_template = default.pattern_template.as_deref().unwrap_or("");
-            if rule.pattern_template != default_template {
+            if step.pattern_template != default_template {
                 config.steps.pattern_overrides.insert(
-                    rule.label.clone(),
-                    rule.pattern_template.clone(),
+                    step.label.clone(),
+                    step.pattern_template.clone(),
                 );
             }
         }
@@ -443,9 +443,9 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 }
                 KeyCode::Tab | KeyCode::BackTab => {
                     app.active_tab = match app.active_tab {
-                        Tab::Rules => Tab::Dictionaries,
+                        Tab::Steps => Tab::Dictionaries,
                         Tab::Dictionaries => Tab::Output,
-                        Tab::Output => Tab::Rules,
+                        Tab::Output => Tab::Steps,
                     };
                 }
                 KeyCode::Char('s') => {
@@ -456,9 +456,9 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     }
                 }
                 _ => match app.active_tab {
-                    Tab::Rules => {
-                        if app.rule_detail_index.is_some() {
-                            handle_rule_detail_key(app, key.code);
+                    Tab::Steps => {
+                        if app.step_detail_index.is_some() {
+                            handle_step_detail_key(app, key.code);
                         } else {
                             handle_rules_key(app, key.code);
                         }
@@ -476,65 +476,65 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
 // ---------------------------------------------------------------------------
 
 fn handle_rules_key(app: &mut App, code: KeyCode) {
-    let len = app.rules.len();
+    let len = app.steps.len();
     if len == 0 {
         return;
     }
     match code {
         KeyCode::Down | KeyCode::Char('j') => {
-            let i = app.rules_list_state.selected().unwrap_or(0);
-            app.rules_list_state.select(Some((i + 1) % len));
+            let i = app.steps_list_state.selected().unwrap_or(0);
+            app.steps_list_state.select(Some((i + 1) % len));
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            let i = app.rules_list_state.selected().unwrap_or(0);
-            app.rules_list_state
+            let i = app.steps_list_state.selected().unwrap_or(0);
+            app.steps_list_state
                 .select(Some(if i == 0 { len - 1 } else { i - 1 }));
         }
         KeyCode::Char(' ') => {
-            if let Some(i) = app.rules_list_state.selected() {
-                app.rules[i].enabled = !app.rules[i].enabled;
+            if let Some(i) = app.steps_list_state.selected() {
+                app.steps[i].enabled = !app.steps[i].enabled;
                 app.dirty = true;
             }
         }
         KeyCode::Enter => {
-            if let Some(i) = app.rules_list_state.selected() {
-                let segments = crate::pattern::parse_pattern(&app.rules[i].pattern_template);
-                app.rule_detail_index = Some(i);
-                app.rule_detail_segments = segments;
-                app.rule_detail_selected = 0;
-                app.rule_detail_alt_selected = None;
+            if let Some(i) = app.steps_list_state.selected() {
+                let segments = crate::pattern::parse_pattern(&app.steps[i].pattern_template);
+                app.step_detail_index = Some(i);
+                app.step_detail_segments = segments;
+                app.step_detail_selected = 0;
+                app.step_detail_alt_selected = None;
             }
         }
         _ => {}
     }
 }
 
-fn handle_rule_detail_key(app: &mut App, code: KeyCode) {
+fn handle_step_detail_key(app: &mut App, code: KeyCode) {
     match code {
-        // Back to rules list
+        // Back to steps list
         KeyCode::Esc | KeyCode::Left => {
-            if app.rule_detail_alt_selected.is_some() {
-                app.rule_detail_alt_selected = None;
+            if app.step_detail_alt_selected.is_some() {
+                app.step_detail_alt_selected = None;
             } else {
-                app.rule_detail_index = None;
+                app.step_detail_index = None;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(alt_idx) = app.rule_detail_alt_selected {
+            if let Some(alt_idx) = app.step_detail_alt_selected {
                 // Navigate within alternation group
                 if let PatternSegment::AlternationGroup { alternatives, .. } =
-                    &app.rule_detail_segments[app.rule_detail_selected]
+                    &app.step_detail_segments[app.step_detail_selected]
                 {
                     if alt_idx + 1 < alternatives.len() {
-                        app.rule_detail_alt_selected = Some(alt_idx + 1);
+                        app.step_detail_alt_selected = Some(alt_idx + 1);
                     }
                 }
             } else {
                 // Navigate between segments (skip non-actionable ones)
-                let len = app.rule_detail_segments.len();
-                let mut next = app.rule_detail_selected + 1;
+                let len = app.step_detail_segments.len();
+                let mut next = app.step_detail_selected + 1;
                 while next < len {
-                    match &app.rule_detail_segments[next] {
+                    match &app.step_detail_segments[next] {
                         PatternSegment::AlternationGroup { .. } | PatternSegment::TableRef(_) => {
                             break
                         }
@@ -542,23 +542,23 @@ fn handle_rule_detail_key(app: &mut App, code: KeyCode) {
                     }
                 }
                 if next < len {
-                    app.rule_detail_selected = next;
+                    app.step_detail_selected = next;
                 }
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(alt_idx) = app.rule_detail_alt_selected {
+            if let Some(alt_idx) = app.step_detail_alt_selected {
                 if alt_idx > 0 {
-                    app.rule_detail_alt_selected = Some(alt_idx - 1);
+                    app.step_detail_alt_selected = Some(alt_idx - 1);
                 }
             } else {
                 // Navigate between segments (skip non-actionable ones)
-                let mut prev = app.rule_detail_selected;
+                let mut prev = app.step_detail_selected;
                 while prev > 0 {
                     prev -= 1;
-                    match &app.rule_detail_segments[prev] {
+                    match &app.step_detail_segments[prev] {
                         PatternSegment::AlternationGroup { .. } | PatternSegment::TableRef(_) => {
-                            app.rule_detail_selected = prev;
+                            app.step_detail_selected = prev;
                             break;
                         }
                         _ => {}
@@ -568,27 +568,27 @@ fn handle_rule_detail_key(app: &mut App, code: KeyCode) {
         }
         // Enter/Right to drill into alternation group
         KeyCode::Enter | KeyCode::Right => {
-            if app.rule_detail_alt_selected.is_none() {
+            if app.step_detail_alt_selected.is_none() {
                 if let PatternSegment::AlternationGroup { .. } =
-                    &app.rule_detail_segments[app.rule_detail_selected]
+                    &app.step_detail_segments[app.step_detail_selected]
                 {
-                    app.rule_detail_alt_selected = Some(0);
+                    app.step_detail_alt_selected = Some(0);
                 }
             }
         }
         // Edit the full pattern template
         KeyCode::Char('e') => {
-            if let Some(rule_idx) = app.rule_detail_index {
-                let template = app.rules[rule_idx].pattern_template.clone();
+            if let Some(step_idx) = app.step_detail_index {
+                let template = app.steps[step_idx].pattern_template.clone();
                 let len = template.len();
                 app.input_mode = InputMode::EditPattern(template, len, None);
             }
         }
         // Space to toggle alternative
         KeyCode::Char(' ') => {
-            if let Some(alt_idx) = app.rule_detail_alt_selected {
+            if let Some(alt_idx) = app.step_detail_alt_selected {
                 if let PatternSegment::AlternationGroup { alternatives, .. } =
-                    &mut app.rule_detail_segments[app.rule_detail_selected]
+                    &mut app.step_detail_segments[app.step_detail_selected]
                 {
                     // Don't allow disabling the last enabled alternative
                     let enabled_count = alternatives.iter().filter(|a| a.enabled).count();
@@ -596,11 +596,11 @@ fn handle_rule_detail_key(app: &mut App, code: KeyCode) {
                         return;
                     }
                     alternatives[alt_idx].enabled = !alternatives[alt_idx].enabled;
-                    // Update the rule's pattern_template from the modified segments
+                    // Update the step's pattern_template from the modified segments
                     let new_template =
-                        crate::pattern::rebuild_pattern(&app.rule_detail_segments);
-                    if let Some(rule_idx) = app.rule_detail_index {
-                        app.rules[rule_idx].pattern_template = new_template;
+                        crate::pattern::rebuild_pattern(&app.step_detail_segments);
+                    if let Some(step_idx) = app.step_detail_index {
+                        app.steps[step_idx].pattern_template = new_template;
                     }
                     app.dirty = true;
                 }
@@ -797,14 +797,14 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                 match validate_pattern_template(text) {
                     Ok(()) => {
                         let new_template = text.clone();
-                        if let Some(rule_idx) = app.rule_detail_index {
-                            app.rules[rule_idx].pattern_template = new_template;
+                        if let Some(step_idx) = app.step_detail_index {
+                            app.steps[step_idx].pattern_template = new_template;
                             // Re-parse segments for the detail view
-                            app.rule_detail_segments = crate::pattern::parse_pattern(
-                                &app.rules[rule_idx].pattern_template,
+                            app.step_detail_segments = crate::pattern::parse_pattern(
+                                &app.steps[step_idx].pattern_template,
                             );
-                            app.rule_detail_selected = 0;
-                            app.rule_detail_alt_selected = None;
+                            app.step_detail_selected = 0;
+                            app.step_detail_alt_selected = None;
                             app.dirty = true;
                         }
                         app.input_mode = InputMode::Normal;
@@ -870,9 +870,9 @@ fn render(frame: &mut Frame, app: &mut App) {
     .areas(frame.area());
 
     // Top-level tabs
-    let tab_titles = vec!["Rules", "Dictionaries", "Output"];
+    let tab_titles = vec!["Steps", "Dictionaries", "Output"];
     let selected_tab = match app.active_tab {
-        Tab::Rules => 0,
+        Tab::Steps => 0,
         Tab::Dictionaries => 1,
         Tab::Output => 2,
     };
@@ -889,23 +889,16 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     // Content
     match app.active_tab {
-        Tab::Rules => render_rules(frame, app, content_area),
+        Tab::Steps => render_steps(frame, app, content_area),
         Tab::Dictionaries => render_dict(frame, app, content_area),
         Tab::Output => render_output(frame, app, content_area),
     }
 
     // Status bar
     let dirty_indicator = if app.dirty { " [modified]" } else { "" };
-    let mode_text = match &app.input_mode {
-        InputMode::Normal => String::new(),
-        InputMode::AddShort(s) => format!(" | Add short form: {}_", s),
-        InputMode::AddLong(short, l) => format!(" | Add {} -> {}_", short, l),
-        InputMode::EditLong(_, t) => format!(" | Edit long form: {}_", t),
-        InputMode::EditPattern(_, _, _) => " | Editing pattern (Enter: confirm, Esc: cancel)".to_string(),
-    };
     let status_text = format!(
-        " Tab: switch | j/k: navigate | Space: toggle | a: add | d: delete | Enter: edit | s: save | q: quit{}{}",
-        dirty_indicator, mode_text
+        " Tab: switch | j/k: navigate | Space: toggle | a: add | d: delete | Enter: edit | s: save | q: quit{}",
+        dirty_indicator
     );
     let status = Paragraph::new(status_text)
         .style(Style::new().bg(Color::DarkGray).fg(Color::White));
@@ -922,16 +915,51 @@ fn render(frame: &mut Frame, app: &mut App) {
         frame.render_widget(ratatui::widgets::Clear, popup_area);
         frame.render_widget(popup, popup_area);
     }
+
+    // Input mode overlay
+    match &app.input_mode {
+        InputMode::Normal => {}
+        InputMode::AddShort(s) => {
+            let popup_area = centered_rect(50, 5, frame.area());
+            let display = format!("{}_", s);
+            let popup = Paragraph::new(display)
+                .block(Block::bordered().title("Add entry — short form (Enter to continue, Esc to cancel)"))
+                .style(Style::new().bg(Color::Black).fg(Color::Cyan));
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(popup, popup_area);
+        }
+        InputMode::AddLong(short, long) => {
+            let popup_area = centered_rect(50, 5, frame.area());
+            let display = format!("{} -> {}_", short, long);
+            let popup = Paragraph::new(display)
+                .block(Block::bordered().title("Add entry — long form (Enter to confirm, Esc to cancel)"))
+                .style(Style::new().bg(Color::Black).fg(Color::Cyan));
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(popup, popup_area);
+        }
+        InputMode::EditLong(_, text) => {
+            let popup_area = centered_rect(50, 5, frame.area());
+            let display = format!("{}_", text);
+            let popup = Paragraph::new(display)
+                .block(Block::bordered().title("Edit long form (Enter to confirm, Esc to cancel)"))
+                .style(Style::new().bg(Color::Black).fg(Color::Cyan));
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(popup, popup_area);
+        }
+        InputMode::EditPattern(_, _, _) => {
+            // Pattern editing is rendered inline in the step detail view
+        }
+    }
 }
 
-fn render_rules(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    if app.rule_detail_index.is_some() {
-        render_rule_detail(frame, app, area);
+fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    if app.step_detail_index.is_some() {
+        render_step_detail(frame, app, area);
         return;
     }
 
     let items: Vec<ListItem> = app
-        .rules
+        .steps
         .iter()
         .map(|r| {
             let check = if r.enabled { " " } else { "x" };
@@ -967,12 +995,12 @@ fn render_rules(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         )
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, area, &mut app.rules_list_state);
+    frame.render_stateful_widget(list, area, &mut app.steps_list_state);
 }
 
-fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let rule_idx = app.rule_detail_index.unwrap();
-    let rule = &app.rules[rule_idx];
+fn render_step_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let step_idx = app.step_detail_index.unwrap();
+    let step = &app.steps[step_idx];
 
     let is_editing = matches!(app.input_mode, InputMode::EditPattern(_, _, _));
     let header_height = if is_editing { 7 } else { 5 };
@@ -983,13 +1011,13 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
     ])
     .areas(area);
 
-    // Header: rule name, group, action, enabled status
+    // Header: step name, type, action, enabled status
     let header_text = format!(
         " {}  |  group: {}  |  action: {}  |  {}",
-        rule.label,
-        rule.group,
-        rule.action_desc,
-        if rule.enabled { "enabled" } else { "DISABLED" },
+        step.label,
+        step.group,
+        step.action_desc,
+        if step.enabled { "enabled" } else { "DISABLED" },
     );
 
     let mut header_lines = vec![
@@ -1020,15 +1048,15 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
         }
     } else {
         header_lines.push(Line::from(Span::styled(
-            format!(" Pattern: {}  (e to edit)", rule.pattern_template),
+            format!(" Pattern: {}  (e to edit)", step.pattern_template),
             Style::new().fg(Color::DarkGray),
         )));
     }
 
     let title = if is_editing {
-        format!("Rule: {} (Enter: confirm, Esc: cancel)", rule.label)
+        format!("Step: {} (Enter: confirm, Esc: cancel)", step.label)
     } else {
-        format!("Rule: {} (Esc to go back)", rule.label)
+        format!("Step: {} (Esc to go back)", step.label)
     };
     let header = Paragraph::new(header_lines)
         .block(Block::bordered().title(title));
@@ -1037,7 +1065,7 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
     // Segments list
     let mut items: Vec<ListItem> = Vec::new();
 
-    for (seg_idx, segment) in app.rule_detail_segments.iter().enumerate() {
+    for (seg_idx, segment) in app.step_detail_segments.iter().enumerate() {
         match segment {
             PatternSegment::Literal(text) => {
                 items.push(ListItem::new(Line::from(vec![
@@ -1046,8 +1074,8 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
                 ])));
             }
             PatternSegment::TableRef(name) => {
-                let is_selected = app.rule_detail_alt_selected.is_none()
-                    && app.rule_detail_selected == seg_idx;
+                let is_selected = app.step_detail_alt_selected.is_none()
+                    && app.step_detail_selected == seg_idx;
                 let style = if is_selected {
                     Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 } else {
@@ -1063,8 +1091,8 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
                 ])));
             }
             PatternSegment::AlternationGroup { alternatives, .. } => {
-                let is_group_selected = app.rule_detail_alt_selected.is_none()
-                    && app.rule_detail_selected == seg_idx;
+                let is_group_selected = app.step_detail_alt_selected.is_none()
+                    && app.step_detail_selected == seg_idx;
                 let group_style = if is_group_selected {
                     Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
@@ -1087,9 +1115,9 @@ fn render_rule_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
                 ])));
 
                 // Show alternatives if this group is drilled into
-                if app.rule_detail_selected == seg_idx && app.rule_detail_alt_selected.is_some() {
+                if app.step_detail_selected == seg_idx && app.step_detail_alt_selected.is_some() {
                     for (alt_idx, alt) in alternatives.iter().enumerate() {
-                        let is_alt_selected = app.rule_detail_alt_selected == Some(alt_idx);
+                        let is_alt_selected = app.step_detail_alt_selected == Some(alt_idx);
                         let (marker, style) = if !alt.enabled {
                             ("x", Style::new().fg(Color::Red))
                         } else {
@@ -1385,11 +1413,11 @@ mod tests {
     #[test]
     fn test_to_config_disabled_rule() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
-        // Disable first rule
-        if !app.rules.is_empty() {
-            app.rules[0].enabled = false;
+        // Disable first step
+        if !app.steps.is_empty() {
+            app.steps[0].enabled = false;
             let config = app.to_config();
-            assert!(config.steps.disabled.contains(&app.rules[0].label));
+            assert!(config.steps.disabled.contains(&app.steps[0].label));
         }
     }
 
@@ -1426,22 +1454,64 @@ mod tests {
     #[test]
     fn test_to_config_pattern_override() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
-        if !app.rules.is_empty() {
-            // Modify a rule's pattern template
-            let original = app.rules[0].pattern_template.clone();
-            app.rules[0].pattern_template = "MODIFIED_PATTERN".to_string();
+        if !app.steps.is_empty() {
+            // Modify a step's pattern template
+            let original = app.steps[0].pattern_template.clone();
+            app.steps[0].pattern_template = "MODIFIED_PATTERN".to_string();
             let config = app.to_config();
-            assert!(config.steps.pattern_overrides.contains_key(&app.rules[0].label));
+            assert!(config.steps.pattern_overrides.contains_key(&app.steps[0].label));
             assert_eq!(
-                config.steps.pattern_overrides.get(&app.rules[0].label).unwrap(),
+                config.steps.pattern_overrides.get(&app.steps[0].label).unwrap(),
                 "MODIFIED_PATTERN"
             );
 
             // Restore to default — should NOT appear in overrides
-            app.rules[0].pattern_template = original;
+            app.steps[0].pattern_template = original;
             let config = app.to_config();
-            assert!(!config.steps.pattern_overrides.contains_key(&app.rules[0].label));
+            assert!(!config.steps.pattern_overrides.contains_key(&app.steps[0].label));
         }
+    }
+
+    #[test]
+    fn test_add_entry_flow() {
+        let mut app = App::new(PathBuf::from("nonexistent.toml"));
+        // Start on Dictionaries tab, select suffix_all (first non-value-list table)
+        app.active_tab = Tab::Dictionaries;
+
+        // Press 'a' to start adding
+        handle_dict_key(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.input_mode, InputMode::AddShort(_)));
+
+        // Type "TST"
+        handle_input_mode(&mut app, KeyCode::Char('T'));
+        handle_input_mode(&mut app, KeyCode::Char('S'));
+        handle_input_mode(&mut app, KeyCode::Char('T'));
+        if let InputMode::AddShort(ref s) = app.input_mode {
+            assert_eq!(s, "TST");
+        } else {
+            panic!("Expected AddShort mode");
+        }
+
+        // Press Enter to move to long form
+        handle_input_mode(&mut app, KeyCode::Enter);
+        assert!(matches!(app.input_mode, InputMode::AddLong(_, _)));
+
+        // Type "TESTING"
+        for c in "TESTING".chars() {
+            handle_input_mode(&mut app, KeyCode::Char(c));
+        }
+
+        // Press Enter to confirm
+        handle_input_mode(&mut app, KeyCode::Enter);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert!(app.dirty);
+
+        // Verify entry was added
+        let entries = app.current_dict_entries();
+        let last = entries.last().unwrap();
+        assert_eq!(last.short, "TST");
+        assert_eq!(last.long, "TESTING");
+        assert_eq!(last.status, EntryStatus::Added);
     }
 
     #[test]

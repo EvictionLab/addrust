@@ -1,5 +1,5 @@
 /// The parsed result of an address string.
-/// Each field is `None` until extracted by a pipeline rule.
+/// Each field is `None` until extracted by a pipeline step.
 #[derive(Debug, Default, Clone)]
 pub struct Address {
     pub street_number: Option<String>,
@@ -91,7 +91,7 @@ impl Address {
     }
 }
 
-/// Which field of an Address a rule targets.
+/// Which field of an Address a step targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Field {
     StreetNumber,

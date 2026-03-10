@@ -52,7 +52,7 @@ enum Commands {
     },
     /// Generate a default .addrust.toml config file
     Init,
-    /// List pipeline rules or dictionary tables
+    /// List pipeline steps or dictionary tables
     List {
         #[command(subcommand)]
         what: ListCommands,
@@ -63,8 +63,8 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum ListCommands {
-    /// List all pipeline rules in order
-    Rules,
+    /// List all pipeline steps in order
+    Steps,
     /// List dictionary tables (optionally show entries for a specific table)
     Tables {
         /// Table name to show entries for
@@ -217,7 +217,7 @@ fn main() {
         Some(Commands::List { what }) => {
             let config = load_config(&cli.config);
             match what {
-                ListCommands::Rules => {
+                ListCommands::Steps => {
                     let pipeline = Pipeline::from_config(&config);
                     for (i, step) in pipeline.step_summaries().iter().enumerate() {
                         let status = if step.enabled { " " } else { "x" };

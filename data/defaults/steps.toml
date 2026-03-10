@@ -17,21 +17,13 @@ pattern = ',\s*([A-Z][A-Z ]+)\W+{state}\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
 target = "extra_back"
 
 # --- PO Box ---
+# Single extraction captures the full PO BOX text; standardize_po_box reformats it.
 [[step]]
 type = "extract"
 label = "po_box"
-pattern = '\bP\W*O\W*BOX\W*(\d+)\b'
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+)\b'
 target = "po_box"
 skip_if_filled = true
-replacement = 'PO BOX $1'
-
-[[step]]
-type = "extract"
-label = "po_box_word"
-pattern = '\bP\W*O\W*BOX\W+(\w+)\b'
-target = "po_box"
-skip_if_filled = true
-replacement = 'PO BOX $1'
 
 # --- Pre-processing rewrites ---
 [[step]]
@@ -176,5 +168,5 @@ format_table = "unit_location"
 type = "standardize"
 label = "standardize_po_box"
 target = "po_box"
-pattern = 'P\W*O\W*BOX\W*(\w+)'
+pattern = '(?:P\W*O\W*BO?X|POB)\W*(\w+)'
 replacement = 'PO BOX $1'

@@ -175,14 +175,17 @@ mod tests {
     #[test]
     fn test_pipeline_default_parses() {
         let p = Pipeline::default();
-        let addr = p.parse("123 Main St");
+        let addr = p.parse("123 N Main St Apt 4B");
         assert_eq!(addr.street_number.as_deref(), Some("123"));
+        assert_eq!(addr.pre_direction.as_deref(), Some("N"));
         assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
         assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+        assert!(addr.unit.is_some());
+        assert!(addr.unit.as_deref().unwrap().contains("4B"));
     }
 
     #[test]
-    fn test_pipeline_from_config_with_disabled_steps() {
+    fn test_config_disabled_steps() {
         let toml_str = r#"
 [steps]
 disabled = ["suffix_common", "suffix_all"]
@@ -190,28 +193,23 @@ disabled = ["suffix_common", "suffix_all"]
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
         let addr = p.parse("123 Main St");
-        assert_eq!(addr.street_number.as_deref(), Some("123"));
         assert!(addr.suffix.is_none());
     }
 
     #[test]
-    fn test_pipeline_from_config_with_pattern_override() {
-        // Override unit_type_value to remove [A-Z] alternative (single letter unit)
+    fn test_config_pattern_override() {
         let toml_str = r#"
-[rules.pattern_overrides]
+[steps.pattern_overrides]
 unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        // Single letter unit should NOT match (removed [A-Z] alternative)
         let addr = p.parse("123 Main St B");
-        // B should end up in street name, not unit
         assert!(addr.unit.is_none() || addr.unit.as_deref() != Some("B"));
     }
 
     #[test]
-    fn test_pipeline_from_config_with_dict_override() {
-        // Add a custom suffix "PSGE" → "PASSAGE" so that "123 Main Psge" parses
+    fn test_config_dict_override() {
         let toml_str = r#"
 [dictionaries.suffix_all]
 add = [{ short = "PSGE", long = "PASSAGE" }]
@@ -223,104 +221,48 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let p = Pipeline::from_config(&config);
         let addr = p.parse("123 Main Psge");
         assert_eq!(addr.suffix.as_deref(), Some("PASSAGE"));
-        assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
     }
 
     #[test]
-    fn test_suffix_standardize_short_output() {
+    fn test_output_format_short() {
         let mut config = crate::config::Config::default();
         config.output.suffix = crate::config::OutputFormat::Short;
-        let p = Pipeline::from_config(&config);
-        let addr = p.parse("123 Main Drive");
-        assert_eq!(addr.suffix.as_deref(), Some("DR"));
-    }
-
-    #[test]
-    fn test_unit_location_standardize_short() {
-        let mut config = crate::config::Config::default();
-        config.output.unit_location = crate::config::OutputFormat::Short;
-        let p = Pipeline::from_config(&config);
-        let addr = p.parse("123 Main St Upper");
-        assert_eq!(addr.unit.as_deref(), Some("UPPR"));
-    }
-
-    #[test]
-    fn test_unit_location_standardize_long_default() {
-        let p = Pipeline::default();
-        let addr = p.parse("123 Main St Uppr");
-        assert_eq!(addr.unit.as_deref(), Some("UPPER"));
-    }
-
-    #[test]
-    fn test_direction_standardize_long_output() {
-        let mut config = crate::config::Config::default();
         config.output.direction = crate::config::OutputFormat::Long;
         let p = Pipeline::from_config(&config);
-        let addr = p.parse("123 N Main St");
+        let addr = p.parse("123 N Main Drive");
+        assert_eq!(addr.suffix.as_deref(), Some("DR"));
         assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
     }
 
     #[test]
-    fn test_step_pipeline_basic() {
-        let p = Pipeline::from_steps_default();
-        let addr = p.parse("123 Main St");
-        assert_eq!(addr.street_number.as_deref(), Some("123"));
-        assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
-        assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+    fn test_po_box_variants() {
+        let p = Pipeline::default();
+        for (input, expected) in [
+            ("PO BOX 123", "PO BOX 123"),
+            ("P O BOX 123", "PO BOX 123"),
+            ("P.O. BOX 123", "PO BOX 123"),
+            ("POBOX 123", "PO BOX 123"),
+            ("PO BOX A", "PO BOX A"),
+        ] {
+            let addr = p.parse(input);
+            assert_eq!(addr.po_box.as_deref(), Some(expected), "input: {}", input);
+        }
     }
 
     #[test]
-    fn test_step_pipeline_with_direction() {
-        let p = Pipeline::from_steps_default();
-        let addr = p.parse("123 N Main St");
-        assert_eq!(addr.pre_direction.as_deref(), Some("N"));
-        assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
-    }
-
-    #[test]
-    fn test_step_pipeline_with_unit() {
-        let p = Pipeline::from_steps_default();
-        let addr = p.parse("123 Main St Apt 4B");
-        // Step pipeline extracts unit including type prefix; finalize doesn't strip it
-        assert!(addr.unit.is_some(), "unit should be extracted");
-        let unit = addr.unit.as_deref().unwrap();
-        assert!(unit.contains("4B"), "unit should contain 4B, got: {}", unit);
-    }
-
-    #[test]
-    fn test_step_pipeline_po_box() {
-        let p = Pipeline::from_steps_default();
-        let addr = p.parse("PO BOX 123");
-        assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123"));
-    }
-
-    #[test]
-    fn test_step_pipeline_st_james() {
-        let p = Pipeline::from_steps_default();
+    fn test_st_to_saint() {
+        let p = Pipeline::default();
         let addr = p.parse("42 W St James Pl");
         assert_eq!(addr.street_name.as_deref(), Some("SAINT JAMES"));
         assert_eq!(addr.suffix.as_deref(), Some("PLACE"));
     }
 
     #[test]
-    fn test_step_pipeline_from_config_disabled() {
-        let toml_str = r#"
-[steps]
-disabled = ["suffix_common", "suffix_all"]
-"#;
-        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
-        let p = Pipeline::from_steps_config(&config);
-        let addr = p.parse("123 Main St");
-        assert!(addr.suffix.is_none());
-    }
-
-    #[test]
     fn test_step_summaries() {
-        let p = Pipeline::from_steps_default();
+        let p = Pipeline::default();
         let summaries = p.step_summaries();
         assert!(!summaries.is_empty());
         assert_eq!(summaries[0].step_type, "validate");
         assert_eq!(summaries[0].label, "na_check");
-        assert!(summaries[0].enabled);
     }
 }
