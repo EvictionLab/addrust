@@ -14,6 +14,8 @@ pub struct AbbrTable {
     pub entries: Vec<Abbr>,
     short_to_long: HashMap<String, String>,
     long_to_short: HashMap<String, String>,
+    /// Optional extraction pattern template for this table.
+    pub pattern_template: Option<String>,
 }
 
 impl AbbrTable {
@@ -37,7 +39,21 @@ impl AbbrTable {
             entries,
             short_to_long: s2l,
             long_to_short: l2s,
+            pattern_template: None,
         }
+    }
+
+    pub fn from_pairs(pairs: Vec<(&str, &str)>) -> Self {
+        let entries = pairs.into_iter()
+            .map(|(s, l)| Abbr { short: s.to_string(), long: l.to_string() })
+            .collect();
+        Self::new(entries)
+    }
+
+    pub fn from_pairs_with_pattern(pairs: Vec<(&str, &str)>, pattern_template: Option<String>) -> Self {
+        let mut table = Self::from_pairs(pairs);
+        table.pattern_template = pattern_template;
+        table
     }
 
     /// Look up short → long (exact match, O(1)).
@@ -533,6 +549,23 @@ mod tests {
             seen_shorts.insert(entry.short.clone());
             assert!(!entry.long.is_empty(), "Empty long for short: {}", entry.short);
         }
+    }
+
+    #[test]
+    fn test_table_pattern_field() {
+        let abbr = build_default_tables();
+        let direction = abbr.get("direction").unwrap();
+        assert!(direction.pattern_template.is_none());
+    }
+
+    #[test]
+    fn test_table_with_pattern() {
+        let table = AbbrTable::from_pairs_with_pattern(
+            vec![("N", "NORTH"), ("S", "SOUTH")],
+            Some(r"\b({direction})\b".to_string()),
+        );
+        assert_eq!(table.pattern_template.as_deref(), Some(r"\b({direction})\b"));
+        assert_eq!(table.to_long("N"), Some("NORTH"));
     }
 
     #[test]
