@@ -1,5 +1,6 @@
 //! DuckDB integration for reading/writing address tables.
 
+use crate::address::Address;
 use duckdb::Connection;
 
 /// Validate that the input table and column exist in the database.
@@ -81,6 +82,63 @@ pub fn read_addresses(db_path: &str, table: &str, column: &str) -> Result<Vec<St
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("Failed to read addresses: {e}"))
+}
+
+/// Write original addresses and parsed components to a new table.
+pub fn write_parsed(
+    db_path: &str,
+    output_table: &str,
+    originals: &[String],
+    parsed: &[Address],
+) -> Result<(), String> {
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+
+    let create_sql = format!(
+        "CREATE TABLE \"{}\" (
+            address VARCHAR,
+            street_number VARCHAR,
+            pre_direction VARCHAR,
+            street_name VARCHAR,
+            suffix VARCHAR,
+            post_direction VARCHAR,
+            unit_type VARCHAR,
+            unit VARCHAR,
+            po_box VARCHAR,
+            building VARCHAR
+        )",
+        output_table
+    );
+
+    conn.execute_batch(&create_sql)
+        .map_err(|e| format!("Failed to create output table: {e}"))?;
+
+    let insert_sql = format!(
+        "INSERT INTO \"{}\" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        output_table
+    );
+
+    let mut stmt = conn
+        .prepare(&insert_sql)
+        .map_err(|e| format!("Failed to prepare insert: {e}"))?;
+
+    for (original, addr) in originals.iter().zip(parsed.iter()) {
+        stmt.execute(duckdb::params![
+            original,
+            addr.street_number.as_deref(),
+            addr.pre_direction.as_deref(),
+            addr.street_name.as_deref(),
+            addr.suffix.as_deref(),
+            addr.post_direction.as_deref(),
+            addr.unit_type.as_deref(),
+            addr.unit.as_deref(),
+            addr.po_box.as_deref(),
+            addr.building.as_deref(),
+        ])
+        .map_err(|e| format!("Failed to insert row: {e}"))?;
+    }
+
+    Ok(())
 }
 
 fn list_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {

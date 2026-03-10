@@ -1,5 +1,6 @@
 #![cfg(feature = "duckdb")]
 
+use addrust::address::Address;
 use duckdb::Connection;
 use tempfile::TempDir;
 
@@ -84,4 +85,66 @@ fn test_read_addresses_skips_nulls() {
     .unwrap();
     let addresses = addrust::duckdb_io::read_addresses(&path, "t", "address").unwrap();
     assert_eq!(addresses.len(), 2);
+}
+
+#[test]
+fn test_write_parsed() {
+    let (_dir, path) = setup_test_db();
+
+    let originals = vec!["123 MAIN ST".to_string(), "456 OAK AVE APT 2".to_string()];
+    let parsed = vec![
+        Address {
+            street_number: Some("123".into()),
+            street_name: Some("MAIN".into()),
+            suffix: Some("ST".into()),
+            ..Default::default()
+        },
+        Address {
+            street_number: Some("456".into()),
+            street_name: Some("OAK".into()),
+            suffix: Some("AVE".into()),
+            unit: Some("2".into()),
+            unit_type: Some("APT".into()),
+            ..Default::default()
+        },
+    ];
+
+    addrust::duckdb_io::write_parsed(&path, "my_data_parsed", &originals, &parsed).unwrap();
+
+    // Verify by reading back
+    let conn = Connection::open(&path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM my_data_parsed", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+
+    let street: String = conn
+        .query_row(
+            "SELECT street_name FROM my_data_parsed WHERE street_number = '123'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(street, "MAIN");
+}
+
+#[test]
+fn test_write_parsed_empty_fields_are_null() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.duckdb").to_str().unwrap().to_string();
+
+    let originals = vec!["PO BOX 100".to_string()];
+    let parsed = vec![Address {
+        po_box: Some("PO BOX 100".into()),
+        ..Default::default()
+    }];
+
+    addrust::duckdb_io::write_parsed(&path, "out", &originals, &parsed).unwrap();
+
+    let conn = Connection::open(&path).unwrap();
+    // street_number should be NULL, not empty string
+    let result: Option<String> = conn
+        .query_row("SELECT street_number FROM out", [], |r| r.get(0))
+        .unwrap();
+    assert!(result.is_none());
 }
