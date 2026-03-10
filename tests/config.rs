@@ -129,3 +129,83 @@ fn test_full_pipeline_with_tables_cleanup() {
     let addr = p.parse("789 ST MARKS PL");
     assert_eq!(addr.street_name.as_deref(), Some("SAINT MARKS"));
 }
+
+#[test]
+fn test_output_suffix_short() {
+    let config: Config = toml::from_str(
+        r#"
+[output]
+suffix = "short"
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("123 Main Street");
+    assert_eq!(addr.suffix.as_deref(), Some("ST"));
+}
+
+#[test]
+fn test_output_suffix_long_default() {
+    let p = Pipeline::default();
+    let addr = p.parse("123 Main St");
+    assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+}
+
+#[test]
+fn test_output_direction_long() {
+    let config: Config = toml::from_str(
+        r#"
+[output]
+direction = "long"
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("123 N Main St");
+    assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
+}
+
+#[test]
+fn test_output_direction_short_default() {
+    let p = Pipeline::default();
+    let addr = p.parse("123 North Main St");
+    assert_eq!(addr.pre_direction.as_deref(), Some("N"));
+}
+
+#[test]
+fn test_output_suffix_variant_canonicalizes() {
+    // DRIV is a variant spelling — should canonicalize to DR then expand to DRIVE (default long)
+    let p = Pipeline::default();
+    let addr = p.parse("123 Main Driv");
+    assert_eq!(addr.suffix.as_deref(), Some("DRIVE"));
+}
+
+#[test]
+fn test_output_suffix_variant_to_short() {
+    let config: Config = toml::from_str(
+        r#"
+[output]
+suffix = "short"
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("123 Main Driv");
+    assert_eq!(addr.suffix.as_deref(), Some("DR"));
+}
+
+#[test]
+fn test_output_combined_settings() {
+    let config: Config = toml::from_str(
+        r#"
+[output]
+suffix = "short"
+direction = "long"
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("123 N Main Drive");
+    assert_eq!(addr.suffix.as_deref(), Some("DR"));
+    assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
+}
