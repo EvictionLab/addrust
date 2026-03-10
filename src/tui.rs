@@ -1039,36 +1039,74 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     ])
     .areas(area);
 
-    // Sub-tab display: show current table with navigation context
-    let num_tables = app.table_names.len();
+    // Sub-tabs for table names — windowed to keep selected tab visible
+    let all_titles: Vec<String> = app
+        .table_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let count = app.dict_entries[i].len();
+            format!("{} ({})", name, count)
+        })
+        .collect();
+
+    // Available width inside the bordered block (subtract 2 for borders)
+    let avail_width = subtab_area.width.saturating_sub(2) as usize;
+    let divider_len = 3; // " | "
+
+    // Find a window of tabs that fits, centered on the selected tab
     let idx = app.dict_tab_index;
-    let count = app.dict_entries[idx].len();
-    let current_name = &app.table_names[idx];
+    let mut win_start = idx;
+    let mut win_end = idx + 1; // exclusive
+    let mut total_width = all_titles[idx].len();
 
-    let prev_hint = if idx > 0 {
-        format!("< {} ", app.table_names[idx - 1])
-    } else {
-        String::new()
-    };
-    let next_hint = if idx + 1 < num_tables {
-        format!(" {} >", app.table_names[idx + 1])
-    } else {
-        String::new()
-    };
+    // Expand window outward, alternating right then left
+    loop {
+        let mut expanded = false;
+        if win_end < all_titles.len() {
+            let next_w = all_titles[win_end].len() + divider_len;
+            if total_width + next_w <= avail_width {
+                total_width += next_w;
+                win_end += 1;
+                expanded = true;
+            }
+        }
+        if win_start > 0 {
+            let prev_w = all_titles[win_start - 1].len() + divider_len;
+            if total_width + prev_w <= avail_width {
+                total_width += prev_w;
+                win_start -= 1;
+                expanded = true;
+            }
+        }
+        if !expanded {
+            break;
+        }
+    }
 
-    let subtab_line = Line::from(vec![
-        Span::styled(prev_hint, Style::new().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{} ({}) [{}/{}]", current_name, count, idx + 1, num_tables),
-            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(next_hint, Style::new().fg(Color::DarkGray)),
-    ]);
+    let visible_titles: Vec<String> = all_titles[win_start..win_end].to_vec();
+    let selected_in_window = idx - win_start;
 
-    let subtab_widget = Paragraph::new(subtab_line)
-        .block(Block::bordered().title("Tables (left/right to switch)"))
-        .alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(subtab_widget, subtab_area);
+    // Add scroll indicators
+    let mut title = String::from("Tables (left/right to switch)");
+    if win_start > 0 || win_end < all_titles.len() {
+        title = format!(
+            "Tables [{}/{}] (left/right to switch)",
+            idx + 1,
+            all_titles.len()
+        );
+    }
+
+    let subtabs = Tabs::new(visible_titles)
+        .block(Block::bordered().title(title))
+        .select(selected_in_window)
+        .highlight_style(
+            Style::new()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )
+        .divider(" | ");
+    frame.render_widget(subtabs, subtab_area);
 
     // Entries — build items from immutable borrow, then drop it before mutable borrow
     let is_value_list = {
