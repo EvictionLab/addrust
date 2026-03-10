@@ -63,11 +63,13 @@ pub struct StepsConfig {
     pub disabled: Vec<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub pattern_overrides: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub step_order: Vec<String>,
 }
 
 impl StepsConfig {
     pub fn is_empty(&self) -> bool {
-        self.disabled.is_empty() && self.pattern_overrides.is_empty()
+        self.disabled.is_empty() && self.pattern_overrides.is_empty() && self.step_order.is_empty()
     }
 }
 
@@ -184,5 +186,30 @@ mod tests {
         let unit = parsed.dictionaries.get("unit_type").unwrap();
         assert_eq!(unit.add.len(), 1);
         assert_eq!(unit.override_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_step_order_roundtrip() {
+        let mut config = Config::default();
+        config.steps.step_order = vec!["po_box".to_string(), "na_check".to_string()];
+        let toml_str = config.to_toml();
+        assert!(toml_str.contains("step_order"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.steps.step_order, vec!["po_box", "na_check"]);
+    }
+
+    #[test]
+    fn test_step_order_empty_not_serialized() {
+        let config = Config::default();
+        let toml_str = config.to_toml();
+        assert!(!toml_str.contains("step_order"));
+    }
+
+    #[test]
+    fn test_steps_config_is_empty_with_step_order() {
+        let mut sc = StepsConfig::default();
+        assert!(sc.is_empty());
+        sc.step_order = vec!["na_check".to_string()];
+        assert!(!sc.is_empty());
     }
 }
