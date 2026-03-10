@@ -621,7 +621,28 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
             KeyCode::Enter => {
                 if !short.is_empty() {
                     let s = short.to_uppercase();
-                    app.input_mode = InputMode::AddLong(s, String::new());
+                    let is_vl = {
+                        let tables = build_default_tables();
+                        tables
+                            .get(&app.table_names[app.dict_tab_index])
+                            .map(|t| t.is_value_list())
+                            .unwrap_or(false)
+                    };
+                    if is_vl {
+                        let new_entry = DictEntryState {
+                            short: s,
+                            long: String::new(),
+                            status: EntryStatus::Added,
+                            original_long: None,
+                        };
+                        app.current_dict_entries_mut().push(new_entry);
+                        let len = app.current_dict_entries().len();
+                        app.dict_list_state.select(Some(len - 1));
+                        app.dirty = true;
+                        app.input_mode = InputMode::Normal;
+                    } else {
+                        app.input_mode = InputMode::AddLong(s, String::new());
+                    }
                 }
             }
             KeyCode::Esc => {
@@ -1040,6 +1061,14 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     frame.render_widget(subtabs, subtab_area);
 
     // Entries — build items from immutable borrow, then drop it before mutable borrow
+    let is_value_list = {
+        let tables = build_default_tables();
+        tables
+            .get(&app.table_names[app.dict_tab_index])
+            .map(|t| t.is_value_list())
+            .unwrap_or(false)
+    };
+
     let (items, table_name) = {
         let entries = app.current_dict_entries();
         let items: Vec<ListItem> = entries
@@ -1056,13 +1085,21 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 } else {
                     String::new()
                 };
-                ListItem::new(Line::from(vec![
-                    Span::styled(marker, style),
-                    Span::styled(format!("{:20}", e.short), style),
-                    Span::styled(" -> ", Style::new().fg(Color::DarkGray)),
-                    Span::styled(e.long.clone(), style),
-                    Span::styled(detail, Style::new().fg(Color::DarkGray)),
-                ]))
+                if is_value_list {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(marker, style),
+                        Span::styled(e.short.clone(), style),
+                        Span::styled(detail, Style::new().fg(Color::DarkGray)),
+                    ]))
+                } else {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(marker, style),
+                        Span::styled(format!("{:20}", e.short), style),
+                        Span::styled(" -> ", Style::new().fg(Color::DarkGray)),
+                        Span::styled(e.long.clone(), style),
+                        Span::styled(detail, Style::new().fg(Color::DarkGray)),
+                    ]))
+                }
             })
             .collect();
         let table_name = app.table_names[app.dict_tab_index].clone();
@@ -1088,34 +1125,7 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 /// Validate a pattern template by expanding table placeholders and compiling.
 fn validate_pattern_template(template: &str) -> Result<(), String> {
     let tables = build_default_tables();
-    let table_names = [
-        ("direction", "direction"),
-        ("common_suffix", "common_suffix"),
-        ("all_suffix", "all_suffix"),
-        ("unit_type", "unit_type"),
-        ("unit_location", "unit_location"),
-        ("state", "state"),
-    ];
-
-    let mut expanded = template.to_string();
-    for (placeholder, table_name) in &table_names {
-        if let Some(table) = tables.get(table_name) {
-            let values = if *table_name == "unit_type" {
-                table
-                    .all_values()
-                    .into_iter()
-                    .filter(|v| *v != "#")
-                    .collect::<Vec<_>>()
-                    .join("|")
-            } else if *table_name == "state" {
-                table.bounded_regex()
-            } else {
-                table.all_values().join("|")
-            };
-            expanded = expanded.replace(&format!("{{{}}}", placeholder), &values);
-        }
-    }
-
+    let expanded = crate::tables::rules::expand_template(template, &tables);
     fancy_regex::Regex::new(&expanded)
         .map(|_| ())
         .map_err(|e| format!("{}", e))
