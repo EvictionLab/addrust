@@ -1,9 +1,10 @@
 use fancy_regex::Regex;
 
 use crate::address::{Address, AddressState, Field};
+use crate::config::OutputFormat;
 use crate::ops::{extract_remove, extract_replace, none_if_empty, replace_pattern, squish};
 use crate::prepare;
-use crate::tables::abbreviations::ABBR;
+use crate::tables::abbreviations::{AbbrTable, Abbreviations};
 
 /// What a rule does when it matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,9 +132,34 @@ pub struct RuleSummary {
     pub enabled: bool,
 }
 
+/// Standardize a value using the two-step canonicalize→format flow.
+///
+/// 1. Canonicalize: look up the value in `matching_table` to get the short form.
+/// 2. Format: based on preference, keep short or expand to long via `canonical_table`.
+fn standardize_value(
+    value: &str,
+    matching_table: &AbbrTable,
+    canonical_table: &AbbrTable,
+    format: OutputFormat,
+) -> String {
+    // Step 1: Canonicalize to short form
+    let short = matching_table.to_short(value).unwrap_or(value);
+
+    // Step 2: Format based on preference
+    match format {
+        OutputFormat::Short => short.to_string(),
+        OutputFormat::Long => canonical_table
+            .to_long(short)
+            .unwrap_or(short)
+            .to_string(),
+    }
+}
+
 /// The parsing pipeline — an ordered sequence of rules.
 pub struct Pipeline {
     rules: Vec<Rule>,
+    output: crate::config::OutputConfig,
+    tables: Abbreviations,
 }
 
 impl Pipeline {
@@ -156,7 +182,10 @@ impl Pipeline {
             disabled_groups: config.rules.disabled_groups.clone(),
         };
 
-        Self::new(rules, &pipeline_config)
+        let mut pipeline = Self::new(rules, &pipeline_config);
+        pipeline.output = config.output.clone();
+        pipeline.tables = tables;
+        pipeline
     }
 
     /// Get metadata about all rules for display purposes.
@@ -171,6 +200,8 @@ impl Pipeline {
     }
 
     pub fn new(mut rules: Vec<Rule>, config: &PipelineConfig) -> Self {
+        use crate::tables::abbreviations::ABBR;
+
         // Apply config: disable rules by label or group
         for rule in &mut rules {
             if config.disabled_rules.contains(&rule.label)
@@ -179,7 +210,11 @@ impl Pipeline {
                 rule.enabled = false;
             }
         }
-        Self { rules }
+        Self {
+            rules,
+            output: crate::config::OutputConfig::default(),
+            tables: ABBR.clone(),
+        }
     }
 
     /// Parse a single address string.
@@ -231,27 +266,28 @@ impl Pipeline {
 
         // Standardize directions
         if let Some(ref dir) = state.fields.pre_direction {
-            if let Some(table) = ABBR.get("direction") {
-                if let Some(short) = table.to_short(dir) {
-                    state.fields.pre_direction = Some(short.to_string());
-                }
+            if let Some(table) = self.tables.get("direction") {
+                state.fields.pre_direction = Some(
+                    standardize_value(dir, table, table, self.output.direction)
+                );
             }
         }
         if let Some(ref dir) = state.fields.post_direction {
-            if let Some(table) = ABBR.get("direction") {
-                if let Some(short) = table.to_short(dir) {
-                    state.fields.post_direction = Some(short.to_string());
-                }
+            if let Some(table) = self.tables.get("direction") {
+                state.fields.post_direction = Some(
+                    standardize_value(dir, table, table, self.output.direction)
+                );
             }
         }
 
-        // Standardize suffix: normalize to USPS long form (STREET, AVENUE, etc.)
+        // Standardize suffix: canonicalize via suffix_all, format via suffix_usps
         if let Some(ref sfx) = state.fields.suffix {
-            if let Some(table) = ABBR.get("suffix_all") {
-                if let Some(long) = table.to_long(sfx) {
-                    state.fields.suffix = Some(long.to_string());
-                }
-                // If already a long form or unrecognized, keep as-is
+            let matching = self.tables.get("suffix_all");
+            let canonical = self.tables.get("suffix_usps");
+            if let (Some(m), Some(c)) = (matching, canonical) {
+                state.fields.suffix = Some(
+                    standardize_value(sfx, m, c, self.output.suffix)
+                );
             }
         }
 
@@ -282,7 +318,11 @@ impl Default for Pipeline {
         use crate::tables::build_rules;
 
         let rules = build_rules(&ABBR, &std::collections::HashMap::new());
-        Self { rules }
+        Self {
+            rules,
+            output: crate::config::OutputConfig::default(),
+            tables: ABBR.clone(),
+        }
     }
 }
 
@@ -331,10 +371,10 @@ unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
     fn test_pipeline_from_config_with_dict_override() {
         // Add a custom suffix "PSGE" → "PASSAGE" so that "123 Main Psge" parses
         let toml_str = r#"
-[dictionaries.all_suffix]
+[dictionaries.suffix_all]
 add = [{ short = "PSGE", long = "PASSAGE" }]
 
-[dictionaries.common_suffix]
+[dictionaries.suffix_common]
 add = [{ short = "PSGE", long = "PASSAGE" }]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
@@ -342,5 +382,23 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let addr = p.parse("123 Main Psge");
         assert_eq!(addr.suffix.as_deref(), Some("PASSAGE"));
         assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+    }
+
+    #[test]
+    fn test_suffix_standardize_short_output() {
+        let mut config = crate::config::Config::default();
+        config.output.suffix = crate::config::OutputFormat::Short;
+        let p = Pipeline::from_config(&config);
+        let addr = p.parse("123 Main Drive");
+        assert_eq!(addr.suffix.as_deref(), Some("DR"));
+    }
+
+    #[test]
+    fn test_direction_standardize_long_output() {
+        let mut config = crate::config::Config::default();
+        config.output.direction = crate::config::OutputFormat::Long;
+        let p = Pipeline::from_config(&config);
+        let addr = p.parse("123 N Main St");
+        assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
     }
 }
