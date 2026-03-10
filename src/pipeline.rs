@@ -297,6 +297,18 @@ impl Pipeline {
             state.fields.unit = if cleaned.is_empty() { None } else { Some(cleaned) };
         }
 
+        // Standardize unit if it's a unit location value
+        if let Some(ref unit) = state.fields.unit {
+            if let Some(table) = self.tables.get("unit_location") {
+                // Only standardize if the value is recognized as a unit location
+                if table.to_short(unit).is_some() || table.to_long(unit).is_some() {
+                    state.fields.unit = Some(
+                        standardize_value(unit, table, table, self.output.unit_location)
+                    );
+                }
+            }
+        }
+
         // If no street number but unit exists, promote unit to street number
         if state.fields.street_number.is_none() && state.fields.unit.is_some() {
             state.fields.street_number = state.fields.unit.take();
@@ -391,6 +403,22 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let p = Pipeline::from_config(&config);
         let addr = p.parse("123 Main Drive");
         assert_eq!(addr.suffix.as_deref(), Some("DR"));
+    }
+
+    #[test]
+    fn test_unit_location_standardize_short() {
+        let mut config = crate::config::Config::default();
+        config.output.unit_location = crate::config::OutputFormat::Short;
+        let p = Pipeline::from_config(&config);
+        let addr = p.parse("123 Main St Upper");
+        assert_eq!(addr.unit.as_deref(), Some("UPPR"));
+    }
+
+    #[test]
+    fn test_unit_location_standardize_long_default() {
+        let p = Pipeline::default();
+        let addr = p.parse("123 Main St Uppr");
+        assert_eq!(addr.unit.as_deref(), Some("UPPER"));
     }
 
     #[test]
