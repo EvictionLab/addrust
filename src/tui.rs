@@ -18,6 +18,7 @@ use crate::tables::abbreviations::build_default_tables;
 enum Tab {
     Rules,
     Dictionaries,
+    Output,
 }
 
 /// Input mode for dictionary and pattern editing.
@@ -32,6 +33,16 @@ enum InputMode {
     EditLong(usize, String),
     /// Editing a rule's pattern template: (text, cursor position, optional validation error).
     EditPattern(String, usize, Option<String>),
+}
+
+/// A per-component output format setting.
+#[derive(Debug, Clone)]
+struct OutputSettingState {
+    component: String,
+    format: crate::config::OutputFormat,
+    default_format: crate::config::OutputFormat,
+    example_short: String,
+    example_long: String,
 }
 
 /// A dictionary entry with its change status.
@@ -96,6 +107,10 @@ struct App {
     dict_entries: Vec<Vec<DictEntryState>>,
     dict_list_state: ListState,
     input_mode: InputMode,
+
+    // -- Output tab --
+    output_settings: Vec<OutputSettingState>,
+    output_list_state: ListState,
 }
 
 impl App {
@@ -198,6 +213,48 @@ impl App {
             dict_list_state.select(Some(0));
         }
 
+        // Build output settings
+        use crate::config::OutputFormat;
+        let output_settings = vec![
+            OutputSettingState {
+                component: "suffix".to_string(),
+                format: config.output.suffix,
+                default_format: OutputFormat::Long,
+                example_short: "DR".to_string(),
+                example_long: "DRIVE".to_string(),
+            },
+            OutputSettingState {
+                component: "direction".to_string(),
+                format: config.output.direction,
+                default_format: OutputFormat::Short,
+                example_short: "N".to_string(),
+                example_long: "NORTH".to_string(),
+            },
+            OutputSettingState {
+                component: "unit_type".to_string(),
+                format: config.output.unit_type,
+                default_format: OutputFormat::Long,
+                example_short: "APT".to_string(),
+                example_long: "APARTMENT".to_string(),
+            },
+            OutputSettingState {
+                component: "unit_location".to_string(),
+                format: config.output.unit_location,
+                default_format: OutputFormat::Long,
+                example_short: "UPPR".to_string(),
+                example_long: "UPPER".to_string(),
+            },
+            OutputSettingState {
+                component: "state".to_string(),
+                format: config.output.state,
+                default_format: OutputFormat::Short,
+                example_short: "NY".to_string(),
+                example_long: "NEW YORK".to_string(),
+            },
+        ];
+        let mut output_list_state = ListState::default();
+        output_list_state.select(Some(0));
+
         App {
             config_path,
             dirty: false,
@@ -214,6 +271,8 @@ impl App {
             dict_entries,
             dict_list_state,
             input_mode: InputMode::Normal,
+            output_settings,
+            output_list_state,
         }
     }
 
@@ -277,6 +336,21 @@ impl App {
                 config.dictionaries.insert(name.clone(), overrides);
             }
         }
+
+        // Output settings
+        let mut output = crate::config::OutputConfig::default();
+        for setting in &self.output_settings {
+            let format = setting.format;
+            match setting.component.as_str() {
+                "suffix" => output.suffix = format,
+                "direction" => output.direction = format,
+                "unit_type" => output.unit_type = format,
+                "unit_location" => output.unit_location = format,
+                "state" => output.state = format,
+                _ => {}
+            }
+        }
+        config.output = output;
 
         config
     }
@@ -362,7 +436,8 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 KeyCode::Tab | KeyCode::BackTab => {
                     app.active_tab = match app.active_tab {
                         Tab::Rules => Tab::Dictionaries,
-                        Tab::Dictionaries => Tab::Rules,
+                        Tab::Dictionaries => Tab::Output,
+                        Tab::Output => Tab::Rules,
                     };
                 }
                 KeyCode::Char('s') => {
@@ -381,6 +456,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                         }
                     }
                     Tab::Dictionaries => handle_dict_key(app, key.code),
+                    Tab::Output => handle_output_key(app, key.code),
                 },
             }
         }
@@ -786,10 +862,11 @@ fn render(frame: &mut Frame, app: &mut App) {
     .areas(frame.area());
 
     // Top-level tabs
-    let tab_titles = vec!["Rules", "Dictionaries"];
+    let tab_titles = vec!["Rules", "Dictionaries", "Output"];
     let selected_tab = match app.active_tab {
         Tab::Rules => 0,
         Tab::Dictionaries => 1,
+        Tab::Output => 2,
     };
     let tabs = Tabs::new(tab_titles)
         .block(Block::bordered().title("addrust configure"))
@@ -806,6 +883,7 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.active_tab {
         Tab::Rules => render_rules(frame, app, content_area),
         Tab::Dictionaries => render_dict(frame, app, content_area),
+        Tab::Output => render_output(frame, app, content_area),
     }
 
     // Status bar
@@ -1197,6 +1275,87 @@ fn centered_rect(
     ])
     .areas(center_v);
     center_h
+}
+
+// ---------------------------------------------------------------------------
+// Output tab
+// ---------------------------------------------------------------------------
+
+fn handle_output_key(app: &mut App, code: KeyCode) {
+    use crate::config::OutputFormat;
+    let len = app.output_settings.len();
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            if len > 0 {
+                let i = app.output_list_state.selected().unwrap_or(0);
+                app.output_list_state.select(Some((i + 1) % len));
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if len > 0 {
+                let i = app.output_list_state.selected().unwrap_or(0);
+                app.output_list_state
+                    .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+            }
+        }
+        KeyCode::Char(' ') => {
+            if let Some(i) = app.output_list_state.selected() {
+                let setting = &mut app.output_settings[i];
+                setting.format = match setting.format {
+                    OutputFormat::Short => OutputFormat::Long,
+                    OutputFormat::Long => OutputFormat::Short,
+                };
+                app.dirty = true;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn render_output(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    use crate::config::OutputFormat;
+
+    let items: Vec<ListItem> = app
+        .output_settings
+        .iter()
+        .map(|s| {
+            let is_modified = s.format != s.default_format;
+            let format_str = match s.format {
+                OutputFormat::Short => "short",
+                OutputFormat::Long => "long",
+            };
+            let example = match s.format {
+                OutputFormat::Short => &s.example_short,
+                OutputFormat::Long => &s.example_long,
+            };
+            let marker = if is_modified { "~ " } else { "  " };
+            let style = if is_modified {
+                Style::new().fg(Color::Yellow)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{:20}", s.component), style),
+                Span::styled(
+                    format!("{:8}", format_str),
+                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(format!("({})", example), Style::new().fg(Color::DarkGray)),
+            ]))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::bordered().title("Output Format (Space to toggle)"))
+        .highlight_style(
+            Style::new()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+
+    frame.render_stateful_widget(list, area, &mut app.output_list_state);
 }
 
 // ---------------------------------------------------------------------------
