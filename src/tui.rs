@@ -105,6 +105,10 @@ struct App {
     // -- Rules tab --
     steps: Vec<StepState>,
     steps_list_state: ListState,
+    /// If Some, we're in move mode — value is the index of the step being moved.
+    moving_step: Option<usize>,
+    /// Original index before move started, for Esc cancel.
+    moving_step_origin: Option<usize>,
 
     // -- Step detail view --
     /// If Some, we're viewing/editing a step's detail (index into steps vec).
@@ -271,6 +275,8 @@ impl App {
             active_tab: Tab::Steps,
             steps,
             steps_list_state,
+            moving_step: None,
+            moving_step_origin: None,
             step_detail_index: None,
             step_detail_segments: Vec::new(),
             step_detail_selected: 0,
@@ -432,6 +438,12 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 continue;
             }
 
+            // Move mode: only step handler processes keys
+            if app.moving_step.is_some() && app.active_tab == Tab::Steps {
+                handle_rules_key(app, key.code);
+                continue;
+            }
+
             // Normal mode
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -480,6 +492,47 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
     if len == 0 {
         return;
     }
+
+    // Move mode: step is grabbed, arrow keys reposition it
+    if let Some(moving_idx) = app.moving_step {
+        match code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if moving_idx + 1 < len {
+                    app.steps.swap(moving_idx, moving_idx + 1);
+                    let new_idx = moving_idx + 1;
+                    app.moving_step = Some(new_idx);
+                    app.steps_list_state.select(Some(new_idx));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if moving_idx > 0 {
+                    app.steps.swap(moving_idx, moving_idx - 1);
+                    let new_idx = moving_idx - 1;
+                    app.moving_step = Some(new_idx);
+                    app.steps_list_state.select(Some(new_idx));
+                }
+            }
+            KeyCode::Enter => {
+                app.moving_step = None;
+                app.moving_step_origin = None;
+                app.dirty = true;
+            }
+            KeyCode::Esc => {
+                // Cancel: remove from current position, re-insert at origin
+                if let Some(origin) = app.moving_step_origin {
+                    let step = app.steps.remove(moving_idx);
+                    app.steps.insert(origin, step);
+                    app.steps_list_state.select(Some(origin));
+                }
+                app.moving_step = None;
+                app.moving_step_origin = None;
+            }
+            _ => {} // All other keys ignored in move mode
+        }
+        return;
+    }
+
+    // Normal mode
     match code {
         KeyCode::Down | KeyCode::Char('j') => {
             let i = app.steps_list_state.selected().unwrap_or(0);
@@ -503,6 +556,12 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
                 app.step_detail_segments = segments;
                 app.step_detail_selected = 0;
                 app.step_detail_alt_selected = None;
+            }
+        }
+        KeyCode::Char('m') => {
+            if let Some(i) = app.steps_list_state.selected() {
+                app.moving_step = Some(i);
+                app.moving_step_origin = Some(i);
             }
         }
         _ => {}
