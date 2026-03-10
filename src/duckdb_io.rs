@@ -59,6 +59,30 @@ fn list_tables(conn: &Connection) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Failed to list tables: {e}"))
 }
 
+/// Read address values from the specified table and column.
+/// Skips NULL values.
+pub fn read_addresses(db_path: &str, table: &str, column: &str) -> Result<Vec<String>, String> {
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+
+    let sql = format!(
+        "SELECT \"{col}\" FROM \"{tbl}\" WHERE \"{col}\" IS NOT NULL",
+        col = column,
+        tbl = table,
+    );
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("Failed to query table: {e}"))?;
+
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to read addresses: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to read addresses: {e}"))
+}
+
 fn list_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare(
