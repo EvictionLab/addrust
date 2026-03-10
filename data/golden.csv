@@ -1,0 +1,20 @@
+input,street_number,pre_direction,street_name,suffix,post_direction,unit,po_box
+NA,,,,,,,
+123 Main St,123,,MAIN,STREET,,,
+123 Main Way,123,,MAIN,WAY,,,
+00123 Main St,123,,MAIN,STREET,,,
+123 Miles St,123,,MILES,STREET,,,
+PO BOX 123,,,,,,,PO BOX 123
+123 Park Place Market St,123,,PARK PLACE MARKET,STREET,,,
+156 1/2 Main St,156,,MAIN,STREET,,1/2,
+123 N Main St,123,N,MAIN,STREET,,,
+123 East Main St,123,E,MAIN,STREET,,,
+123 East Main St N,123,E,MAIN,STREET,N,,
+123 Raven Dr,123,,RAVEN,DRIVE,,,
+100 F Ave,100,,F,AVENUE,,,
+Main St #5,5,,MAIN,STREET,,,
+123 Andie St,123,,ANDIE,STREET,,,
+123 Orchard St,123,,ORCHARD,STREET,,,
+123 W Flower St,123,W,FLOWER,STREET,,,
+42 W St James Pl,42,W,SAINT JAMES,PLACE,,,
+PO Box 343 789 S Oak Ave,789,S,OAK,AVENUE,,,PO BOX 343
