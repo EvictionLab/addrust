@@ -78,3 +78,54 @@ fn test_default_pipeline_matches_no_config() {
     assert_eq!(addr1.suffix, addr2.suffix);
     assert_eq!(addr1.unit, addr2.unit);
 }
+
+#[test]
+fn test_mt_to_mount_default() {
+    let p = Pipeline::default();
+    let addr = p.parse("123 MT VERNON AVE");
+    assert_eq!(addr.street_name.as_deref(), Some("MOUNT VERNON"));
+}
+
+#[test]
+fn test_ft_to_fort_default() {
+    let p = Pipeline::default();
+    let addr = p.parse("456 FT WORTH BLVD");
+    assert_eq!(addr.street_name.as_deref(), Some("FORT WORTH"));
+}
+
+#[test]
+fn test_config_adds_street_name_abbr() {
+    let config: Config = toml::from_str(
+        r#"
+[dictionaries.street_name_abbr]
+add = [{ short = "PT", long = "POINT" }]
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("123 PT LOOKOUT RD");
+    assert_eq!(addr.street_name.as_deref(), Some("POINT LOOKOUT"));
+}
+
+#[test]
+fn test_full_pipeline_with_tables_cleanup() {
+    let p = Pipeline::default();
+
+    // NA values from table
+    let addr = p.parse("NULL");
+    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+
+    let addr = p.parse("UNKNOWN");
+    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+
+    // Street name abbreviations from table
+    let addr = p.parse("123 MT PLEASANT AVE");
+    assert_eq!(addr.street_name.as_deref(), Some("MOUNT PLEASANT"));
+
+    let addr = p.parse("456 FT HAMILTON PKWY");
+    assert_eq!(addr.street_name.as_deref(), Some("FORT HAMILTON"));
+
+    // ST → SAINT still works (hardcoded rule)
+    let addr = p.parse("789 ST MARKS PL");
+    assert_eq!(addr.street_name.as_deref(), Some("SAINT MARKS"));
+}
