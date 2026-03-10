@@ -132,6 +132,15 @@ pub struct RuleSummary {
     pub enabled: bool,
 }
 
+/// Summary of a step for display purposes.
+#[derive(Debug)]
+pub struct StepSummary {
+    pub label: String,
+    pub step_type: String,
+    pub pattern_template: Option<String>,
+    pub enabled: bool,
+}
+
 /// Standardize a value using the two-step canonicalize→format flow.
 ///
 /// 1. Canonicalize: look up the value in `matching_table` to get the short form.
@@ -155,9 +164,11 @@ fn standardize_value(
     }
 }
 
-/// The parsing pipeline — an ordered sequence of rules.
+/// The parsing pipeline — an ordered sequence of rules (or steps).
 pub struct Pipeline {
     rules: Vec<Rule>,
+    steps: Vec<crate::step::Step>,
+    use_steps: bool,
     output: crate::config::OutputConfig,
     tables: Abbreviations,
 }
@@ -185,7 +196,29 @@ impl Pipeline {
         let mut pipeline = Self::new(rules, &pipeline_config);
         pipeline.output = config.output.clone();
         pipeline.tables = tables;
+        pipeline.steps = Vec::new();
+        pipeline.use_steps = false;
         pipeline
+    }
+
+    /// Build a pipeline using the step-based parse path with default tables and steps.
+    pub fn from_steps_default() -> Self {
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::step::{compile_steps, StepsDef};
+
+        let tables = build_default_tables();
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let defs: StepsDef = toml::from_str(toml_str)
+            .expect("Failed to parse default steps.toml");
+        let steps = compile_steps(&defs.step, &tables);
+
+        Self {
+            rules: Vec::new(),
+            steps,
+            use_steps: true,
+            output: crate::config::OutputConfig::default(),
+            tables,
+        }
     }
 
     /// Get metadata about all rules for display purposes.
@@ -196,6 +229,16 @@ impl Pipeline {
             action: r.action,
             pattern_template: r.pattern_template.clone(),
             enabled: r.enabled,
+        }).collect()
+    }
+
+    /// Get metadata about all steps for display purposes.
+    pub fn step_summaries(&self) -> Vec<StepSummary> {
+        self.steps.iter().map(|s| StepSummary {
+            label: s.label().to_string(),
+            step_type: s.step_type().to_string(),
+            pattern_template: s.pattern_template().map(|p| p.to_string()),
+            enabled: s.enabled(),
         }).collect()
     }
 
@@ -212,6 +255,8 @@ impl Pipeline {
         }
         Self {
             rules,
+            steps: Vec::new(),
+            use_steps: false,
             output: crate::config::OutputConfig::default(),
             tables: ABBR.clone(),
         }
@@ -235,9 +280,15 @@ impl Pipeline {
 
         let mut state = AddressState::new_from_prepared(prepared);
 
-        // Apply all rules in order
-        for rule in &self.rules {
-            apply_rule(&mut state, rule);
+        // Apply steps or rules depending on pipeline mode
+        if self.use_steps {
+            for step in &self.steps {
+                crate::step::apply_step(&mut state, step, &self.tables, &self.output);
+            }
+        } else {
+            for rule in &self.rules {
+                apply_rule(&mut state, rule);
+            }
         }
 
         // Finalize: whatever remains in working string becomes street_name
@@ -332,6 +383,8 @@ impl Default for Pipeline {
         let rules = build_rules(&ABBR, &std::collections::HashMap::new());
         Self {
             rules,
+            steps: Vec::new(),
+            use_steps: false,
             output: crate::config::OutputConfig::default(),
             tables: ABBR.clone(),
         }
@@ -428,5 +481,59 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let p = Pipeline::from_config(&config);
         let addr = p.parse("123 N Main St");
         assert_eq!(addr.pre_direction.as_deref(), Some("NORTH"));
+    }
+
+    // --- Step-based pipeline tests ---
+
+    #[test]
+    fn test_step_pipeline_basic() {
+        let p = Pipeline::from_steps_default();
+        let addr = p.parse("123 Main St");
+        assert_eq!(addr.street_number.as_deref(), Some("123"));
+        assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+        assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+    }
+
+    #[test]
+    fn test_step_pipeline_with_direction() {
+        let p = Pipeline::from_steps_default();
+        let addr = p.parse("123 N Main St");
+        assert_eq!(addr.pre_direction.as_deref(), Some("N"));
+        assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+    }
+
+    #[test]
+    fn test_step_pipeline_with_unit() {
+        let p = Pipeline::from_steps_default();
+        let addr = p.parse("123 Main St Apt 4B");
+        // Step pipeline extracts unit including type prefix; finalize doesn't strip it
+        assert!(addr.unit.is_some(), "unit should be extracted");
+        let unit = addr.unit.as_deref().unwrap();
+        assert!(unit.contains("4B"), "unit should contain 4B, got: {}", unit);
+    }
+
+    #[test]
+    fn test_step_pipeline_po_box() {
+        let p = Pipeline::from_steps_default();
+        let addr = p.parse("PO BOX 123");
+        assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123"));
+    }
+
+    #[test]
+    fn test_step_pipeline_st_james() {
+        let p = Pipeline::from_steps_default();
+        let addr = p.parse("42 W St James Pl");
+        assert_eq!(addr.street_name.as_deref(), Some("SAINT JAMES"));
+        assert_eq!(addr.suffix.as_deref(), Some("PLACE"));
+    }
+
+    #[test]
+    fn test_step_summaries() {
+        let p = Pipeline::from_steps_default();
+        let summaries = p.step_summaries();
+        assert!(!summaries.is_empty());
+        assert_eq!(summaries[0].step_type, "validate");
+        assert_eq!(summaries[0].label, "na_check");
+        assert!(summaries[0].enabled);
     }
 }
