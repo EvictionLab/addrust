@@ -8,6 +8,9 @@ pub mod prepare;
 pub mod tables;
 pub mod tui;
 
+#[cfg(feature = "duckdb")]
+pub mod duckdb_io;
+
 use address::Address;
 use pipeline::Pipeline;
 
