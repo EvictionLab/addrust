@@ -270,6 +270,17 @@ mode = "whole_field"
     }
 
     #[test]
+    fn test_default_steps_toml_parses() {
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        assert!(defs.step.len() > 20, "Expected 20+ steps, got {}", defs.step.len());
+        assert_eq!(defs.step[0].step_type, "validate");
+        assert_eq!(defs.step[0].label, "na_check");
+        let last = defs.step.last().unwrap();
+        assert_eq!(last.step_type, "standardize");
+    }
+
+    #[test]
     fn test_step_set_enabled() {
         let mut step = Step::Validate {
             label: "check".to_string(),
