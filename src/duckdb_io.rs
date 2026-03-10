@@ -87,6 +87,8 @@ pub fn read_addresses(db_path: &str, table: &str, column: &str) -> Result<Vec<St
 }
 
 /// Write original addresses and parsed components to a new table.
+/// Sorts by street_name before inserting for better columnar compression.
+/// Uses DuckDB's Appender API for bulk insert performance.
 pub fn write_parsed(
     db_path: &str,
     output_table: &str,
@@ -115,29 +117,35 @@ pub fn write_parsed(
     conn.execute_batch(&create_sql)
         .map_err(|e| format!("Failed to create output table: {e}"))?;
 
-    let insert_sql = format!(
-        "INSERT INTO \"{}\" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        output_table
-    );
+    // Sort by street_name for better columnar compression
+    let mut indices: Vec<usize> = (0..originals.len()).collect();
+    indices.sort_by(|&a, &b| {
+        parsed[a]
+            .street_name
+            .as_deref()
+            .unwrap_or("")
+            .cmp(parsed[b].street_name.as_deref().unwrap_or(""))
+    });
 
-    let mut stmt = conn
-        .prepare(&insert_sql)
-        .map_err(|e| format!("Failed to prepare insert: {e}"))?;
+    let mut appender = conn
+        .appender(output_table)
+        .map_err(|e| format!("Failed to create appender: {e}"))?;
 
-    for (original, addr) in originals.iter().zip(parsed.iter()) {
-        stmt.execute(duckdb::params![
-            original,
-            addr.street_number.as_deref(),
-            addr.pre_direction.as_deref(),
-            addr.street_name.as_deref(),
-            addr.suffix.as_deref(),
-            addr.post_direction.as_deref(),
-            addr.unit_type.as_deref(),
-            addr.unit.as_deref(),
-            addr.po_box.as_deref(),
-            addr.building.as_deref(),
-        ])
-        .map_err(|e| format!("Failed to insert row: {e}"))?;
+    for &i in &indices {
+        appender
+            .append_row(duckdb::params![
+                originals[i].as_str(),
+                parsed[i].street_number.as_deref(),
+                parsed[i].pre_direction.as_deref(),
+                parsed[i].street_name.as_deref(),
+                parsed[i].suffix.as_deref(),
+                parsed[i].post_direction.as_deref(),
+                parsed[i].unit_type.as_deref(),
+                parsed[i].unit.as_deref(),
+                parsed[i].po_box.as_deref(),
+                parsed[i].building.as_deref(),
+            ])
+            .map_err(|e| format!("Failed to append row: {e}"))?;
     }
 
     Ok(())
