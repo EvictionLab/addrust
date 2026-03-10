@@ -955,10 +955,14 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     // Status bar
     let dirty_indicator = if app.dirty { " [modified]" } else { "" };
-    let status_text = format!(
-        " Tab: switch | j/k: navigate | Space: toggle | a: add | d: delete | Enter: edit | s: save | q: quit{}",
-        dirty_indicator
-    );
+    let status_text = if app.moving_step.is_some() {
+        format!(" ↑↓: move | Enter: confirm | Esc: cancel{}", dirty_indicator)
+    } else {
+        format!(
+            " Tab: switch | j/k: navigate | Space: toggle | m: move | Enter: edit | s: save | q: quit{}",
+            dirty_indicator
+        )
+    };
     let status = Paragraph::new(status_text)
         .style(Style::new().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(status, status_area);
@@ -1020,27 +1024,36 @@ fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = app
         .steps
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(idx, r)| {
+            let is_moving = app.moving_step == Some(idx);
             let check = if r.enabled { " " } else { "x" };
-            let style = if !r.enabled {
+            let style = if is_moving {
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if !r.enabled {
                 Style::new().fg(Color::DarkGray)
             } else if r.enabled != r.default_enabled {
                 Style::new().fg(Color::Yellow)
             } else {
                 Style::new()
             };
+            let check_style = if is_moving {
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if r.enabled {
+                Style::new().fg(Color::Green)
+            } else {
+                Style::new().fg(Color::Red)
+            };
+            let pattern_style = if is_moving {
+                Style::new().fg(Color::Yellow)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", check),
-                    if r.enabled {
-                        Style::new().fg(Color::Green)
-                    } else {
-                        Style::new().fg(Color::Red)
-                    },
-                ),
+                Span::styled(format!("[{}] ", check), check_style),
                 Span::styled(format!("{:30} ", r.label), style),
-                Span::styled(format!("{:8} ", r.action_desc), Style::new().fg(Color::DarkGray)),
-                Span::styled(&r.pattern_template, Style::new().fg(Color::DarkGray)),
+                Span::styled(format!("{:8} ", r.action_desc), if is_moving { style } else { Style::new().fg(Color::DarkGray) }),
+                Span::styled(&r.pattern_template, pattern_style),
             ]))
         })
         .collect();
