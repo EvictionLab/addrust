@@ -144,10 +144,28 @@ impl App {
         let default_summaries = default_pipeline.step_summaries();
         let config_summaries = pipeline.step_summaries();
 
+        // Use label-based lookup for default_enabled (not positional zip)
+        let default_enabled_map: std::collections::HashMap<&str, bool> = default_summaries
+            .iter()
+            .map(|s| (s.label.as_str(), s.enabled))
+            .collect();
+
         let steps: Vec<StepState> = config_summaries
             .iter()
-            .zip(default_summaries.iter())
-            .map(|(current, default)| StepState::from_step_summaries(current, default))
+            .map(|current| {
+                let default_enabled = default_enabled_map
+                    .get(current.label.as_str())
+                    .copied()
+                    .unwrap_or(true);
+                StepState {
+                    label: current.label.clone(),
+                    group: current.step_type.clone(),
+                    action_desc: current.step_type.clone(),
+                    pattern_template: current.pattern_template.clone().unwrap_or_default(),
+                    enabled: current.enabled,
+                    default_enabled,
+                }
+            })
             .collect();
 
         let mut steps_list_state = ListState::default();
@@ -304,17 +322,32 @@ impl App {
             .collect();
         config.steps.disabled = disabled;
 
-        // Pattern overrides: collect modified templates
+        // Pattern overrides: compare by label (not position) since steps may be reordered
         let default_pipeline = Pipeline::default();
         let default_summaries = default_pipeline.step_summaries();
-        for (step, default) in self.steps.iter().zip(default_summaries.iter()) {
-            let default_template = default.pattern_template.as_deref().unwrap_or("");
+        let default_patterns: std::collections::HashMap<&str, &str> = default_summaries
+            .iter()
+            .map(|s| (s.label.as_str(), s.pattern_template.as_deref().unwrap_or("")))
+            .collect();
+
+        for step in &self.steps {
+            let default_template = default_patterns
+                .get(step.label.as_str())
+                .copied()
+                .unwrap_or("");
             if step.pattern_template != default_template {
                 config.steps.pattern_overrides.insert(
                     step.label.clone(),
                     step.pattern_template.clone(),
                 );
             }
+        }
+
+        // Step order: only store if different from default
+        let default_order: Vec<&str> = default_summaries.iter().map(|s| s.label.as_str()).collect();
+        let current_order: Vec<&str> = self.steps.iter().map(|s| s.label.as_str()).collect();
+        if current_order != default_order {
+            config.steps.step_order = self.steps.iter().map(|s| s.label.clone()).collect();
         }
 
         // Dictionaries: collect changes per table
