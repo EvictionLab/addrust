@@ -50,13 +50,32 @@ impl AbbrTable {
         self.long_to_short.get(long).map(|s| s.as_str())
     }
 
+    /// True when all long forms are empty — a value-list table (not a short↔long mapping).
+    pub fn is_value_list(&self) -> bool {
+        !self.entries.is_empty() && self.entries.iter().all(|e| e.long.is_empty())
+    }
+
+    /// Only the short column values, sorted by length descending.
+    pub fn short_values(&self) -> Vec<&str> {
+        let mut vals: Vec<&str> = self
+            .entries
+            .iter()
+            .map(|e| e.short.as_str())
+            .collect();
+        vals.sort_unstable();
+        vals.dedup();
+        vals.sort_by(|a, b| b.len().cmp(&a.len()));
+        vals
+    }
+
     /// All unique values (short + long), sorted by length descending.
-    /// Used to build alternation regex patterns.
+    /// Used to build alternation regex patterns. Skips empty strings.
     pub fn all_values(&self) -> Vec<&str> {
         let mut vals: Vec<&str> = self
             .entries
             .iter()
             .flat_map(|e| [e.short.as_str(), e.long.as_str()])
+            .filter(|v| !v.is_empty())
             .collect();
         vals.sort_unstable();
         vals.dedup();
@@ -427,5 +446,43 @@ mod tests {
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.to_long("STE"), Some("SUITE NUMBER"));
+    }
+
+    #[test]
+    fn test_is_value_list_true() {
+        let table = AbbrTable::new(vec![
+            abbr("NULL", ""),
+            abbr("NAN", ""),
+            abbr("MISSING", ""),
+        ]);
+        assert!(table.is_value_list());
+    }
+
+    #[test]
+    fn test_is_value_list_false() {
+        let table = AbbrTable::new(vec![abbr("ST", "STREET")]);
+        assert!(!table.is_value_list());
+    }
+
+    #[test]
+    fn test_all_values_skips_empty() {
+        let table = AbbrTable::new(vec![
+            abbr("NULL", ""),
+            abbr("NAN", ""),
+        ]);
+        let vals = table.all_values();
+        assert_eq!(vals, vec!["NULL", "NAN"]);
+        assert!(!vals.contains(&""));
+    }
+
+    #[test]
+    fn test_short_values() {
+        let table = AbbrTable::new(vec![
+            abbr("ST", "STREET"),
+            abbr("AVE", "AVENUE"),
+        ]);
+        let shorts = table.short_values();
+        // Sorted by length descending
+        assert_eq!(shorts, vec!["AVE", "ST"]);
     }
 }
