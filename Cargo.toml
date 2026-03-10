@@ -12,7 +12,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 ratatui = "0.29"
 crossterm = "0.28"
-duckdb = { version = "1.4", optional = true }
+duckdb = { version = "1.4", optional = true, features = ["bundled"] }
 
 [features]
 duckdb = ["dep:duckdb"]

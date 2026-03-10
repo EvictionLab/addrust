@@ -1,1 +1,74 @@
 //! DuckDB integration for reading/writing address tables.
+
+use duckdb::Connection;
+
+/// Validate that the input table and column exist in the database.
+/// Returns Ok(()) or an error message listing available tables/columns.
+pub fn validate_input(db_path: &str, table: &str, column: &str) -> Result<(), String> {
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+
+    // Check table exists
+    let tables = list_tables(&conn)?;
+    if !tables.iter().any(|t| t.eq_ignore_ascii_case(table)) {
+        return Err(format!(
+            "Table '{}' not found. Available tables: {}",
+            table,
+            tables.join(", ")
+        ));
+    }
+
+    // Check column exists
+    let columns = list_columns(&conn, table)?;
+    if !columns.iter().any(|c| c.eq_ignore_ascii_case(column)) {
+        return Err(format!(
+            "Column '{}' not found in '{}'. Available columns: {}",
+            column,
+            table,
+            columns.join(", ")
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate that the output table does not already exist.
+pub fn validate_output(db_path: &str, table: &str) -> Result<(), String> {
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+
+    let tables = list_tables(&conn)?;
+    if tables.iter().any(|t| t.eq_ignore_ascii_case(table)) {
+        return Err(format!(
+            "Output table '{}' already exists. Drop it first or choose a different name.",
+            table
+        ));
+    }
+
+    Ok(())
+}
+
+fn list_tables(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'")
+        .map_err(|e| format!("Failed to list tables: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list tables: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list tables: {e}"))
+}
+
+fn list_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT column_name FROM information_schema.columns \
+             WHERE table_schema = 'main' AND table_name = ?",
+        )
+        .map_err(|e| format!("Failed to list columns: {e}"))?;
+    let rows = stmt
+        .query_map([table], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to list columns: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to list columns: {e}"))
+}
