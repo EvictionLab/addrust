@@ -30,6 +30,9 @@ pub struct Rule {
     pub target: Option<Field>,
     /// Regex replacement for standardization (applied to extracted value or working string).
     pub standardize: Option<(Regex, String)>,
+    /// Table-driven standardization: pairs of (match_regex, replacement_string).
+    /// Used when a single rule needs to replace multiple different matched values.
+    pub standardize_pairs: Vec<(Regex, String)>,
     /// If true, skip this rule when the target field is already filled.
     pub skip_if_filled: bool,
     pub enabled: bool,
@@ -77,7 +80,18 @@ fn apply_rule(state: &mut AddressState, rule: &Rule) {
             }
         }
         Action::Change => {
-            if let Some((ref match_re, ref replacement)) = rule.standardize {
+            if !rule.standardize_pairs.is_empty() {
+                #[cfg(test)]
+                let before = state.working.clone();
+                for (match_re, replacement) in &rule.standardize_pairs {
+                    replace_pattern(&mut state.working, match_re, replacement);
+                }
+                squish(&mut state.working);
+                #[cfg(test)]
+                if before != state.working {
+                    eprintln!("[CHANGE {}] {:?} → {:?}", rule.label, before, state.working);
+                }
+            } else if let Some((ref match_re, ref replacement)) = rule.standardize {
                 #[cfg(test)]
                 let before = state.working.clone();
                 replace_pattern(&mut state.working, match_re, replacement);

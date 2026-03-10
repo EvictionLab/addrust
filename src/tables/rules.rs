@@ -95,6 +95,7 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
             action,
             target,
             standardize: std,
+            standardize_pairs: Vec::new(),
             skip_if_filled,
             enabled: true,
         }
@@ -315,24 +316,42 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     // ═══════════════════════════════════════════════════════════════════
     // 11. STREET NAME STANDARDIZATION — on whatever remains
     // ═══════════════════════════════════════════════════════════════════
-    rules.push(rule(
-        "change_name_mt_to_mount",
-        "street_name",
-        r"\bMT\b",
-        Action::Change,
-        None,
-        Some((r"\bMT\b", "MOUNT")),
-        false,
-    ));
-    rules.push(rule(
-        "change_name_ft_to_fort",
-        "street_name",
-        r"\bFT\b",
-        Action::Change,
-        None,
-        Some((r"\bFT\b", "FORT")),
-        false,
-    ));
+    // Table-driven street name abbreviation replacement (MT→MOUNT, FT→FORT, etc.)
+    {
+        let template = r"\b({street_name_abbr$short})\b";
+        let final_template = pattern_overrides
+            .get("change_street_name_abbr")
+            .cloned()
+            .unwrap_or_else(|| template.to_string());
+        let final_pattern = expand_template(&final_template, abbr);
+
+        let pairs: Vec<(Regex, String)> = abbr
+            .get("street_name_abbr")
+            .map(|t| {
+                t.short_to_long_pairs()
+                    .into_iter()
+                    .map(|(short, long)| {
+                        let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
+                        (re, long)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        rules.push(Rule {
+            label: "change_street_name_abbr".to_string(),
+            group: "street_name".to_string(),
+            pattern: Regex::new(&final_pattern)
+                .unwrap_or_else(|e| panic!("Bad regex in rule change_street_name_abbr: {}", e)),
+            pattern_template: final_template,
+            action: Action::Change,
+            target: None,
+            standardize: None,
+            standardize_pairs: pairs,
+            skip_if_filled: false,
+            enabled: true,
+        });
+    }
     // ST → SAINT when at start of remaining name and followed by 3+ letter word
     rules.push(rule(
         "change_name_st_to_saint",
