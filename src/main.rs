@@ -21,14 +21,30 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Parse addresses from stdin
+    /// Parse addresses from stdin or DuckDB
     Parse {
-        /// Output format: "clean" (default), "full", or "tsv"
+        /// Output format: "clean" (default), "full", or "tsv" (stdin mode only)
         #[arg(long, default_value = "clean")]
         format: String,
         /// Show timing information
         #[arg(long)]
         time: bool,
+        /// DuckDB database file path
+        #[cfg(feature = "duckdb")]
+        #[arg(long)]
+        duckdb: Option<PathBuf>,
+        /// Input table name (required with --duckdb)
+        #[cfg(feature = "duckdb")]
+        #[arg(long)]
+        input_table: Option<String>,
+        /// Output table name (default: {input_table}_parsed)
+        #[cfg(feature = "duckdb")]
+        #[arg(long)]
+        output_table: Option<String>,
+        /// Address column name (default: "address")
+        #[cfg(feature = "duckdb")]
+        #[arg(long, default_value = "address")]
+        column: String,
     },
     /// Generate a default .addrust.toml config file
     Init,
@@ -136,8 +152,44 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Parse { format, time }) => {
+        Some(Commands::Parse {
+            format,
+            time,
+            #[cfg(feature = "duckdb")]
+            duckdb,
+            #[cfg(feature = "duckdb")]
+            input_table,
+            #[cfg(feature = "duckdb")]
+            output_table,
+            #[cfg(feature = "duckdb")]
+            column,
+        }) => {
             let config = load_config(&cli.config);
+
+            #[cfg(feature = "duckdb")]
+            if let Some(ref db_path) = duckdb {
+                let input = match input_table {
+                    Some(ref t) => t.clone(),
+                    None => {
+                        eprintln!("Error: --input-table is required when using --duckdb");
+                        std::process::exit(1);
+                    }
+                };
+                let output = output_table
+                    .unwrap_or_else(|| format!("{}_parsed", input));
+                let db_str = db_path.to_str().unwrap_or_else(|| {
+                    eprintln!("Error: invalid database path");
+                    std::process::exit(1);
+                });
+                if let Err(e) = addrust::duckdb_io::run_duckdb(
+                    &config, db_str, &input, &output, &column,
+                ) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+
             run_parse(&config, &format, time);
         }
         Some(Commands::Init) => {
