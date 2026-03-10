@@ -1,36 +1,14 @@
+use std::collections::HashMap;
+
 use fancy_regex::Regex;
 
 use crate::address::Field;
 use crate::pipeline::{Action, Rule};
 use crate::tables::abbreviations::Abbreviations;
 
-fn rule(
-    label: &str,
-    group: &str,
-    pattern: &str,
-    pattern_template: &str,
-    action: Action,
-    target: Option<Field>,
-    standardize: Option<(&str, &str)>,
-    skip_if_filled: bool,
-) -> Rule {
-    let std = standardize.map(|(m, r)| (Regex::new(m).unwrap(), r.to_string()));
-    Rule {
-        label: label.to_string(),
-        group: group.to_string(),
-        pattern: Regex::new(pattern).unwrap_or_else(|e| panic!("Bad regex in rule {}: {}", label, e)),
-        pattern_template: pattern_template.to_string(),
-        action,
-        target,
-        standardize: std,
-        skip_if_filled,
-        enabled: true,
-    }
-}
-
 /// Build the full ordered pipeline of rules.
 /// Extraction order: outside-in, most certain first.
-pub fn build_rules(abbr: &Abbreviations) -> Vec<Rule> {
+pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, String>) -> Vec<Rule> {
 
     let dir_table = abbr.get("direction").unwrap();
     let suffix_table = abbr.get("all_suffix").unwrap();
@@ -39,7 +17,6 @@ pub fn build_rules(abbr: &Abbreviations) -> Vec<Rule> {
     let unit_loc_table = abbr.get("unit_location").unwrap();
     let state_table = abbr.get("state").unwrap();
 
-    // let b_dir = dir_table.bounded_regex();
     let b_state = state_table.bounded_regex();
 
     let nb_dir: String = dir_table.all_values().join("|");
@@ -53,11 +30,44 @@ pub fn build_rules(abbr: &Abbreviations) -> Vec<Rule> {
         .collect::<Vec<_>>()
         .join("|");
     let nb_unit_loc: String = unit_loc_table.all_values().join("|");
-    // let nb_no_dir: String = ('A'..='Z')
-    //     .filter(|c| !['N', 'S', 'E', 'W'].contains(c))
-    //     .map(|c| c.to_string())
-    //     .collect::<Vec<_>>()
-    //     .join("|");
+
+    let mut table_values: HashMap<&str, &str> = HashMap::new();
+    table_values.insert("direction", &nb_dir);
+    table_values.insert("common_suffix", &nb_common_suffix);
+    table_values.insert("all_suffix", &nb_all_suffix);
+    table_values.insert("unit_type", &nb_unit_type);
+    table_values.insert("unit_location", &nb_unit_loc);
+    table_values.insert("state", &b_state);
+
+    // Closure captures shared state — each call site only passes rule-specific args.
+    let rule = |label: &str, group: &str, pattern: &str, pattern_template: &str,
+                action: Action, target: Option<Field>,
+                standardize: Option<(&str, &str)>, skip_if_filled: bool| -> Rule {
+        let (final_pattern, final_template) =
+            if let Some(override_template) = pattern_overrides.get(label) {
+                let mut expanded = override_template.clone();
+                for (name, values) in &table_values {
+                    expanded = expanded.replace(&format!("{{{}}}", name), values);
+                }
+                (expanded, override_template.clone())
+            } else {
+                (pattern.to_string(), pattern_template.to_string())
+            };
+
+        let std = standardize.map(|(m, r)| (Regex::new(m).unwrap(), r.to_string()));
+        Rule {
+            label: label.to_string(),
+            group: group.to_string(),
+            pattern: Regex::new(&final_pattern)
+                .unwrap_or_else(|e| panic!("Bad regex in rule {}: {}", label, e)),
+            pattern_template: final_template,
+            action,
+            target,
+            standardize: std,
+            skip_if_filled,
+            enabled: true,
+        }
+    };
 
     let mut rules = Vec::new();
 

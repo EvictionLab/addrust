@@ -2,6 +2,7 @@ pub mod address;
 pub mod config;
 pub mod init;
 pub mod ops;
+pub mod pattern;
 pub mod pipeline;
 pub mod prepare;
 pub mod tables;

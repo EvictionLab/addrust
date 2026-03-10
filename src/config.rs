@@ -19,6 +19,8 @@ pub struct RulesConfig {
     pub disabled: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled_groups: Vec<String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub pattern_overrides: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -41,7 +43,7 @@ pub struct DictEntry {
 impl RulesConfig {
     /// Returns true if both disabled and disabled_groups are empty.
     pub fn is_empty(&self) -> bool {
-        self.disabled.is_empty() && self.disabled_groups.is_empty()
+        self.disabled.is_empty() && self.disabled_groups.is_empty() && self.pattern_overrides.is_empty()
     }
 }
 
@@ -156,6 +158,43 @@ override = [{ short = "STE", long = "SUITE NUMBER" }]
         assert!(toml_str.contains("[dictionaries.suffix]"));
         assert!(toml_str.contains("PSGE"));
         assert!(toml_str.contains("TRAILER"));
+    }
+
+    #[test]
+    fn test_parse_pattern_overrides() {
+        let toml_str = r#"
+[rules]
+disabled = ["unit_pound"]
+
+[rules.pattern_overrides]
+unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.rules.disabled, vec!["unit_pound"]);
+        let override_val = config.rules.pattern_overrides.get("unit_type_value").unwrap();
+        assert!(override_val.contains("\\d+"));
+        assert!(!override_val.contains("[A-Z])\\s*$"));
+    }
+
+    #[test]
+    fn test_serialize_pattern_overrides() {
+        let mut config = Config::default();
+        config.rules.pattern_overrides.insert(
+            "suffix_common".to_string(),
+            r"(?<!^)\b({common_suffix})\s*$".to_string(),
+        );
+        let toml_str = config.to_toml();
+        assert!(toml_str.contains("[rules.pattern_overrides]"));
+        assert!(toml_str.contains("suffix_common"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.rules.pattern_overrides.contains_key("suffix_common"));
+    }
+
+    #[test]
+    fn test_empty_pattern_overrides_not_serialized() {
+        let config = Config::default();
+        let toml_str = config.to_toml();
+        assert!(!toml_str.contains("pattern_overrides"));
     }
 
     #[test]

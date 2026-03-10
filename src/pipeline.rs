@@ -135,7 +135,7 @@ impl Pipeline {
             tables.patch(&config.dictionaries)
         };
 
-        let rules = build_rules(&tables);
+        let rules = build_rules(&tables, &config.rules.pattern_overrides);
 
         let pipeline_config = PipelineConfig {
             disabled_rules: config.rules.disabled.clone(),
@@ -267,7 +267,7 @@ impl Default for Pipeline {
         use crate::tables::abbreviations::ABBR;
         use crate::tables::build_rules;
 
-        let rules = build_rules(&ABBR);
+        let rules = build_rules(&ABBR, &std::collections::HashMap::new());
         Self { rules }
     }
 }
@@ -296,6 +296,21 @@ disabled_groups = ["suffix"]
         let addr = p.parse("123 Main St");
         assert_eq!(addr.street_number.as_deref(), Some("123"));
         assert!(addr.suffix.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_from_config_with_pattern_override() {
+        // Override unit_type_value to remove [A-Z] alternative (single letter unit)
+        let toml_str = r#"
+[rules.pattern_overrides]
+unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        // Single letter unit should NOT match (removed [A-Z] alternative)
+        let addr = p.parse("123 Main St B");
+        // B should end up in street name, not unit
+        assert!(addr.unit.is_none() || addr.unit.as_deref() != Some("B"));
     }
 
     #[test]

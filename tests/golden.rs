@@ -3,7 +3,7 @@ use addrust::tables::build_rules;
 use addrust::tables::abbreviations::ABBR;
 
 fn pipeline() -> Pipeline {
-    Pipeline::new(build_rules(&ABBR), &PipelineConfig::default())
+    Pipeline::new(build_rules(&ABBR, &std::collections::HashMap::new()), &PipelineConfig::default())
 }
 
 /// Parse golden.csv and compare each address against expected output.
