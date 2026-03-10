@@ -52,6 +52,31 @@ impl Pipeline {
 
         let mut steps = compile_steps(&defs.step, &tables);
 
+        // Apply step_order reordering
+        if !config.steps.step_order.is_empty() {
+            let order = &config.steps.step_order;
+            // Build position map: label -> index in step_order
+            let pos_map: std::collections::HashMap<&str, usize> = order
+                .iter()
+                .enumerate()
+                .map(|(i, label)| (label.as_str(), i))
+                .collect();
+
+            // Partition into ordered (in step_order) and unordered (not in step_order)
+            let mut ordered: Vec<(usize, crate::step::Step)> = Vec::new();
+            let mut unordered: Vec<crate::step::Step> = Vec::new();
+            for step in steps {
+                if let Some(&pos) = pos_map.get(step.label()) {
+                    ordered.push((pos, step));
+                } else {
+                    unordered.push(step);
+                }
+            }
+            ordered.sort_by_key(|(pos, _)| *pos);
+            steps = ordered.into_iter().map(|(_, s)| s).collect();
+            steps.extend(unordered);
+        }
+
         // Apply disabled list
         for step in &mut steps {
             if config.steps.disabled.contains(&step.label().to_string()) {
@@ -264,5 +289,51 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         assert!(!summaries.is_empty());
         assert_eq!(summaries[0].step_type, "validate");
         assert_eq!(summaries[0].label, "na_check");
+    }
+
+    #[test]
+    fn test_config_step_order() {
+        let toml_str = r#"
+[steps]
+step_order = ["pre_direction", "suffix_common", "na_check"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let summaries = p.step_summaries();
+        // First three should be reordered
+        assert_eq!(summaries[0].label, "pre_direction");
+        assert_eq!(summaries[1].label, "suffix_common");
+        assert_eq!(summaries[2].label, "na_check");
+    }
+
+    #[test]
+    fn test_config_step_order_unknown_labels_ignored() {
+        let toml_str = r#"
+[steps]
+step_order = ["nonexistent", "na_check", "po_box"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let summaries = p.step_summaries();
+        // na_check and po_box should be first two (nonexistent ignored)
+        assert_eq!(summaries[0].label, "na_check");
+        assert_eq!(summaries[1].label, "po_box");
+    }
+
+    #[test]
+    fn test_config_step_order_missing_labels_appended() {
+        // Only specify a partial order — remaining steps keep relative default order
+        let toml_str = r#"
+[steps]
+step_order = ["suffix_common", "na_check"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let summaries = p.step_summaries();
+        assert_eq!(summaries[0].label, "suffix_common");
+        assert_eq!(summaries[1].label, "na_check");
+        // Remaining steps should follow in their default relative order
+        assert_eq!(summaries[2].label, "city_state_zip");
+        assert_eq!(summaries[3].label, "po_box");
     }
 }
