@@ -5,8 +5,68 @@ use crate::address::Field;
 use crate::config::OutputFormat;
 use crate::ops::{extract_remove, none_if_empty, replace_pattern, squish};
 use crate::tables::abbreviations::AbbrTable;
-use crate::tables::expand_template;
 use crate::tables::Abbreviations;
+
+/// Expand all `{...}` placeholders in a template using abbreviation tables.
+///
+/// - `{table_name}` → `table.all_values().join("|")`
+/// - `{table_name$short}` → `table.short_values().join("|")`
+///
+/// Special cases:
+/// - `state` uses `bounded_regex()` (word-boundary-wrapped)
+/// - `unit_type` excludes `#` from `all_values()`
+///
+/// Regex quantifiers like `{5}` or `{1,6}` are left untouched.
+pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
+    let mut result = template.to_string();
+    let mut search_from = 0;
+    loop {
+        let start = match result[search_from..].find('{') {
+            Some(s) => search_from + s,
+            None => break,
+        };
+        let end = match result[start..].find('}') {
+            Some(e) => start + e,
+            None => break,
+        };
+        let placeholder = result[start + 1..end].to_string();
+
+        // Skip regex quantifiers like {5} or {1,6}
+        if placeholder.chars().all(|c| c.is_ascii_digit() || c == ',') {
+            search_from = end + 1;
+            continue;
+        }
+
+        let (table_name, accessor) = if let Some(idx) = placeholder.find('$') {
+            (&placeholder[..idx], Some(&placeholder[idx + 1..]))
+        } else {
+            (placeholder.as_str(), None)
+        };
+
+        if let Some(table) = abbr.get(table_name) {
+            let values = match (table_name, accessor) {
+                ("state", _) => table.bounded_regex(),
+                ("unit_type", None) => table
+                    .all_values()
+                    .into_iter()
+                    .filter(|v| *v != "#")
+                    .collect::<Vec<_>>()
+                    .join("|"),
+                (_, Some("short")) => table.short_values().join("|"),
+                _ => table.all_values().join("|"),
+            };
+            let before = &result[..start];
+            let after = &result[end + 1..];
+            let new_result = format!("{}{}{}", before, values, after);
+            search_from = start + values.len();
+            result = new_result;
+        } else {
+            // Unknown table — skip past to avoid infinite loop
+            search_from = end + 1;
+        }
+    }
+    result
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandardizeMode {
@@ -787,5 +847,61 @@ table = "street_name_abbr"
         let output = OutputConfig::default();
         apply_step(&mut state, &step, &abbr, &output);
         assert_eq!(state.fields.suffix.as_deref(), Some("STREET"));
+    }
+
+    #[test]
+    fn test_expand_template_all_values() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template("{direction}", &abbr);
+        assert!(expanded.contains("NORTH"));
+        assert!(expanded.contains("NE"));
+    }
+
+    #[test]
+    fn test_expand_template_short_accessor() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template("{direction$short}", &abbr);
+        assert!(expanded.contains("NE"));
+        assert!(!expanded.contains("NORTH"));
+    }
+
+    #[test]
+    fn test_expand_template_state_bounded() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template("{state}", &abbr);
+        assert!(expanded.starts_with(r"\b("));
+    }
+
+    #[test]
+    fn test_expand_template_unit_type_excludes_hash() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template("{unit_type}", &abbr);
+        assert!(!expanded.contains("#"));
+        assert!(expanded.contains("APARTMENT"));
+    }
+
+    #[test]
+    fn test_expand_template_regex_quantifiers_preserved() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template(r"\d{5}(?:\W\d{4})?", &abbr);
+        assert_eq!(expanded, r"\d{5}(?:\W\d{4})?");
+    }
+
+    #[test]
+    fn test_expand_template_mixed() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let expanded = expand_template(
+            r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s([A-Z]{3,20})",
+            &abbr,
+        );
+        assert!(expanded.contains("NORTH"));
+        assert!(expanded.contains(r"\d{1,6}"));
+        assert!(expanded.contains(r"[A-Z]{3,20}"));
     }
 }
