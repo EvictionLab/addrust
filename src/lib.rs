@@ -5,6 +5,7 @@ pub mod ops;
 pub mod pattern;
 pub mod pipeline;
 pub mod prepare;
+pub mod step;
 pub mod tables;
 pub mod tui;
 
