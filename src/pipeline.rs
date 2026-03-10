@@ -176,29 +176,7 @@ pub struct Pipeline {
 impl Pipeline {
     /// Build pipeline from a Config (file-based configuration).
     pub fn from_config(config: &crate::config::Config) -> Self {
-        use crate::tables::abbreviations::build_default_tables;
-        use crate::tables::build_rules;
-
-        let tables = build_default_tables();
-        let tables = if config.dictionaries.is_empty() {
-            tables
-        } else {
-            tables.patch(&config.dictionaries)
-        };
-
-        let rules = build_rules(&tables, &config.rules.pattern_overrides);
-
-        let pipeline_config = PipelineConfig {
-            disabled_rules: config.rules.disabled.clone(),
-            disabled_groups: config.rules.disabled_groups.clone(),
-        };
-
-        let mut pipeline = Self::new(rules, &pipeline_config);
-        pipeline.output = config.output.clone();
-        pipeline.tables = tables;
-        pipeline.steps = Vec::new();
-        pipeline.use_steps = false;
-        pipeline
+        Self::from_steps_config(config)
     }
 
     /// Build a step-based pipeline from a Config (file-based configuration).
@@ -418,17 +396,7 @@ impl Pipeline {
 
 impl Default for Pipeline {
     fn default() -> Self {
-        use crate::tables::abbreviations::ABBR;
-        use crate::tables::build_rules;
-
-        let rules = build_rules(&ABBR, &std::collections::HashMap::new());
-        Self {
-            rules,
-            steps: Vec::new(),
-            use_steps: false,
-            output: crate::config::OutputConfig::default(),
-            tables: ABBR.clone(),
-        }
+        Self::from_steps_default()
     }
 }
 
@@ -446,10 +414,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_from_config_with_disabled_rule() {
+    fn test_pipeline_from_config_with_disabled_steps() {
         let toml_str = r#"
-[rules]
-disabled_groups = ["suffix"]
+[steps]
+disabled = ["suffix_common", "suffix_all"]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);

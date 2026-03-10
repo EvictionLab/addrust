@@ -2,11 +2,11 @@ use addrust::config::Config;
 use addrust::pipeline::Pipeline;
 
 #[test]
-fn test_config_disables_suffix_group() {
+fn test_config_disables_suffix_steps() {
     let config: Config = toml::from_str(
         r#"
-[rules]
-disabled_groups = ["suffix"]
+[steps]
+disabled = ["suffix_common", "suffix_all"]
 "#,
     )
     .unwrap();
@@ -46,7 +46,7 @@ add = [{ short = "VACANT", long = "" }]
     .unwrap();
     let p = Pipeline::from_config(&config);
     let addr = p.parse("VACANT");
-    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+    assert!(addr.warnings.contains(&"na_address".to_string()));
 }
 
 #[test]
@@ -61,7 +61,7 @@ remove = ["NULL"]
     let p = Pipeline::from_config(&config);
     let addr = p.parse("NULL");
     // NULL should no longer trigger NA warning
-    assert!(!addr.warnings.contains(&"change_na_address".to_string()));
+    assert!(!addr.warnings.contains(&"na_address".to_string()));
 }
 
 #[test]
@@ -113,10 +113,10 @@ fn test_full_pipeline_with_tables_cleanup() {
 
     // NA values from table
     let addr = p.parse("NULL");
-    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+    assert!(addr.warnings.contains(&"na_address".to_string()));
 
     let addr = p.parse("UNKNOWN");
-    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+    assert!(addr.warnings.contains(&"na_address".to_string()));
 
     // Street name abbreviations from table
     let addr = p.parse("123 MT PLEASANT AVE");
