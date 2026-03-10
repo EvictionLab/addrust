@@ -1,6 +1,8 @@
 //! DuckDB integration for reading/writing address tables.
 
 use crate::address::Address;
+use crate::config::Config;
+use crate::pipeline::Pipeline;
 use duckdb::Connection;
 
 /// Validate that the input table and column exist in the database.
@@ -137,6 +139,31 @@ pub fn write_parsed(
         ])
         .map_err(|e| format!("Failed to insert row: {e}"))?;
     }
+
+    Ok(())
+}
+
+/// Run the full DuckDB parse pipeline: validate, read, parse, write.
+pub fn run_duckdb(
+    config: &Config,
+    db_path: &str,
+    input_table: &str,
+    output_table: &str,
+    column: &str,
+) -> Result<(), String> {
+    validate_input(db_path, input_table, column)?;
+    validate_output(db_path, output_table)?;
+
+    let addresses = read_addresses(db_path, input_table, column)?;
+    eprintln!("Read {} addresses from '{}'", addresses.len(), input_table);
+
+    let pipeline = Pipeline::from_config(config);
+    let refs: Vec<&str> = addresses.iter().map(|s| s.as_str()).collect();
+    let parsed = pipeline.parse_batch(&refs);
+    eprintln!("Parsed {} addresses", parsed.len());
+
+    write_parsed(db_path, output_table, &addresses, &parsed)?;
+    eprintln!("Wrote results to '{}'", output_table);
 
     Ok(())
 }

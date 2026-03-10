@@ -148,3 +148,49 @@ fn test_write_parsed_empty_fields_are_null() {
         .unwrap();
     assert!(result.is_none());
 }
+
+use addrust::config::Config;
+
+#[test]
+fn test_run_duckdb_full_roundtrip() {
+    let (_dir, path) = setup_test_db();
+
+    let config = Config::default();
+    addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address").unwrap();
+
+    let conn = Connection::open(&path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM my_data_parsed", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
+
+    // Verify a parsed address has components
+    let suffix: String = conn
+        .query_row(
+            "SELECT suffix FROM my_data_parsed WHERE street_number = '123'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(suffix, "STREET");
+}
+
+#[test]
+fn test_run_duckdb_missing_input_table() {
+    let (_dir, path) = setup_test_db();
+    let config = Config::default();
+
+    let result = addrust::duckdb_io::run_duckdb(&config, &path, "nonexistent", "out", "address");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("not found"));
+}
+
+#[test]
+fn test_run_duckdb_output_table_already_exists() {
+    let (_dir, path) = setup_test_db();
+    let config = Config::default();
+
+    let result = addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data", "address");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("already exists"));
+}
