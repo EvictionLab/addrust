@@ -158,9 +158,15 @@ pub fn run_duckdb(
     input_table: &str,
     output_table: &str,
     column: &str,
+    overwrite: bool,
 ) -> Result<(), String> {
     validate_input(db_path, input_table, column)?;
-    validate_output(db_path, output_table)?;
+
+    if overwrite {
+        drop_table_if_exists(db_path, output_table)?;
+    } else {
+        validate_output(db_path, output_table)?;
+    }
 
     let addresses = read_addresses(db_path, input_table, column)?;
     eprintln!("Read {} addresses from '{}'", addresses.len(), input_table);
@@ -174,6 +180,13 @@ pub fn run_duckdb(
     eprintln!("Wrote results to '{}'", output_table);
 
     Ok(())
+}
+
+fn drop_table_if_exists(db_path: &str, table: &str) -> Result<(), String> {
+    let conn =
+        Connection::open(db_path).map_err(|e| format!("Failed to open database: {e}"))?;
+    conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{}\"", table))
+        .map_err(|e| format!("Failed to drop table '{}': {e}", table))
 }
 
 fn list_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {

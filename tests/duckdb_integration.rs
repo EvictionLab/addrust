@@ -156,7 +156,7 @@ fn test_run_duckdb_full_roundtrip() {
     let (_dir, path) = setup_test_db();
 
     let config = Config::default();
-    addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address").unwrap();
+    addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address", false).unwrap();
 
     let conn = Connection::open(&path).unwrap();
     let count: i64 = conn
@@ -180,7 +180,7 @@ fn test_run_duckdb_missing_input_table() {
     let (_dir, path) = setup_test_db();
     let config = Config::default();
 
-    let result = addrust::duckdb_io::run_duckdb(&config, &path, "nonexistent", "out", "address");
+    let result = addrust::duckdb_io::run_duckdb(&config, &path, "nonexistent", "out", "address", false);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found"));
 }
@@ -190,9 +190,32 @@ fn test_run_duckdb_output_table_already_exists() {
     let (_dir, path) = setup_test_db();
     let config = Config::default();
 
-    let result = addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data", "address");
+    let result = addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data", "address", false);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("already exists"));
+}
+
+#[test]
+fn test_run_duckdb_overwrite() {
+    let (_dir, path) = setup_test_db();
+    let config = Config::default();
+
+    // First run creates the table
+    addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address", false).unwrap();
+
+    // Without overwrite, should fail
+    let result = addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address", false);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("already exists"));
+
+    // With overwrite, should succeed
+    addrust::duckdb_io::run_duckdb(&config, &path, "my_data", "my_data_parsed", "address", true).unwrap();
+
+    let conn = Connection::open(&path).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM my_data_parsed", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 3);
 }
 
 #[test]
@@ -210,7 +233,7 @@ fn test_end_to_end_with_varied_addresses() {
     drop(conn);
 
     let config = Config::default();
-    addrust::duckdb_io::run_duckdb(&config, &path, "parcels", "parcels_parsed", "address")
+    addrust::duckdb_io::run_duckdb(&config, &path, "parcels", "parcels_parsed", "address", false)
         .unwrap();
 
     let conn = Connection::open(&path).unwrap();

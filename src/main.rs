@@ -45,6 +45,10 @@ enum Commands {
         #[cfg(feature = "duckdb")]
         #[arg(long, default_value = "address")]
         column: String,
+        /// Overwrite output table if it already exists
+        #[cfg(feature = "duckdb")]
+        #[arg(long)]
+        overwrite: bool,
     },
     /// Generate a default .addrust.toml config file
     Init,
@@ -163,6 +167,8 @@ fn main() {
             output_table,
             #[cfg(feature = "duckdb")]
             column,
+            #[cfg(feature = "duckdb")]
+            overwrite,
         }) => {
             let config = load_config(&cli.config);
 
@@ -182,7 +188,7 @@ fn main() {
                     std::process::exit(1);
                 });
                 if let Err(e) = addrust::duckdb_io::run_duckdb(
-                    &config, db_str, &input, &output, &column,
+                    &config, db_str, &input, &output, &column, overwrite,
                 ) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
