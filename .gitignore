@@ -1,2 +1,3 @@
 /target
 .addrust.toml
+.worktrees/
