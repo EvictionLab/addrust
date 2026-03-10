@@ -2,6 +2,8 @@ use fancy_regex::Regex;
 use serde::Deserialize;
 
 use crate::address::Field;
+use crate::tables::expand_template;
+use crate::tables::Abbreviations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StandardizeMode {
@@ -39,8 +41,9 @@ pub enum Step {
     Standardize {
         label: String,
         target: Field,
-        matching_table: String,
-        format_table: String,
+        matching_table: Option<String>,
+        format_table: Option<String>,
+        pattern: Option<(Regex, String)>,
         mode: StandardizeMode,
         enabled: bool,
     },
@@ -136,6 +139,156 @@ fn parse_field(name: &str) -> Field {
         "extra_back" => Field::ExtraBack,
         _ => panic!("Unknown field name: {}", name),
     }
+}
+
+/// Compile a single StepDef into a Step, expanding table references in patterns.
+pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String> {
+    match def.step_type.as_str() {
+        "validate" => {
+            let template = def
+                .pattern
+                .as_ref()
+                .ok_or_else(|| format!("validate step '{}' missing pattern", def.label))?;
+            let expanded = expand_template(template, abbr);
+            let pattern = Regex::new(&expanded)
+                .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
+            Ok(Step::Validate {
+                label: def.label.clone(),
+                pattern,
+                pattern_template: template.clone(),
+                warning: def.warning.clone().unwrap_or_else(|| def.label.clone()),
+                clear: def.clear.unwrap_or(false),
+                enabled: true,
+            })
+        }
+        "rewrite" => {
+            let template = def
+                .pattern
+                .as_ref()
+                .ok_or_else(|| format!("rewrite step '{}' missing pattern", def.label))?;
+            let expanded = expand_template(template, abbr);
+            let pattern = Regex::new(&expanded)
+                .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
+            Ok(Step::Rewrite {
+                label: def.label.clone(),
+                pattern,
+                pattern_template: template.clone(),
+                replacement: def.replacement.clone(),
+                rewrite_table: def.table.clone(),
+                enabled: true,
+            })
+        }
+        "extract" => {
+            let template = if let Some(ref p) = def.pattern {
+                p.clone()
+            } else if let Some(ref table_name) = def.table {
+                let table = abbr.get(table_name).ok_or_else(|| {
+                    format!(
+                        "extract step '{}' references unknown table '{}'",
+                        def.label, table_name
+                    )
+                })?;
+                table
+                    .pattern_template
+                    .as_ref()
+                    .ok_or_else(|| format!("table '{}' has no pattern_template", table_name))?
+                    .clone()
+            } else {
+                return Err(format!(
+                    "extract step '{}' needs either pattern or table",
+                    def.label
+                ));
+            };
+
+            let expanded = expand_template(&template, abbr);
+            let pattern = Regex::new(&expanded)
+                .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
+
+            let target = def
+                .target
+                .as_ref()
+                .ok_or_else(|| format!("extract step '{}' missing target", def.label))?;
+
+            let replacement = if let Some(ref r) = def.replacement {
+                let expanded_r = expand_template(r, abbr);
+                // The extract pattern serves as the match regex for replacement;
+                // the replacement field is the substitution template.
+                Some((
+                    Regex::new(&expanded).map_err(|e| {
+                        format!("Bad replacement regex in step '{}': {}", def.label, e)
+                    })?,
+                    expanded_r,
+                ))
+            } else {
+                None
+            };
+
+            Ok(Step::Extract {
+                label: def.label.clone(),
+                pattern,
+                pattern_template: template,
+                target: parse_field(target),
+                skip_if_filled: def.skip_if_filled.unwrap_or(false),
+                replacement,
+                enabled: true,
+            })
+        }
+        "standardize" => {
+            let target = def
+                .target
+                .as_ref()
+                .ok_or_else(|| format!("standardize step '{}' missing target", def.label))?;
+            let mode = match def.mode.as_deref() {
+                Some("per_word") => StandardizeMode::PerWord,
+                _ => StandardizeMode::WholeField,
+            };
+
+            // Regex-based standardize: has pattern+replacement instead of tables
+            let pattern = if let Some(ref p) = def.pattern {
+                let expanded = expand_template(p, abbr);
+                let re = Regex::new(&expanded)
+                    .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
+                let repl = def
+                    .replacement
+                    .clone()
+                    .unwrap_or_default();
+                Some((re, repl))
+            } else {
+                None
+            };
+
+            // Table-based standardize requires both tables
+            if pattern.is_none() {
+                if def.matching_table.is_none() || def.format_table.is_none() {
+                    return Err(format!(
+                        "standardize step '{}' needs either pattern+replacement or matching_table+format_table",
+                        def.label
+                    ));
+                }
+            }
+
+            Ok(Step::Standardize {
+                label: def.label.clone(),
+                target: parse_field(target),
+                matching_table: def.matching_table.clone(),
+                format_table: def.format_table.clone(),
+                pattern,
+                mode,
+                enabled: true,
+            })
+        }
+        other => Err(format!(
+            "Unknown step type '{}' in step '{}'",
+            other, def.label
+        )),
+    }
+}
+
+/// Compile all step definitions into executable Steps.
+pub fn compile_steps(defs: &[StepDef], abbr: &Abbreviations) -> Vec<Step> {
+    defs.iter()
+        .map(|d| compile_step(d, abbr).unwrap_or_else(|e| panic!("{}", e)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -258,8 +411,9 @@ mode = "whole_field"
         let std_step = Step::Standardize {
             label: "std".to_string(),
             target: Field::Suffix,
-            matching_table: "suffix_all".to_string(),
-            format_table: "suffix_usps".to_string(),
+            matching_table: Some("suffix_all".to_string()),
+            format_table: Some("suffix_usps".to_string()),
+            pattern: None,
             mode: StandardizeMode::WholeField,
             enabled: false,
         };
@@ -293,5 +447,114 @@ mode = "whole_field"
         assert!(step.enabled());
         step.set_enabled(false);
         assert!(!step.enabled());
+    }
+
+    #[test]
+    fn test_compile_rewrite_step() {
+        use crate::tables::abbreviations::build_default_tables;
+        let def = StepDef {
+            step_type: "rewrite".to_string(),
+            label: "test_rewrite".to_string(),
+            pattern: Some(r"\b({direction})\b".to_string()),
+            replacement: Some("$1".to_string()),
+            table: None,
+            target: None,
+            warning: None,
+            clear: None,
+            skip_if_filled: None,
+            matching_table: None,
+            format_table: None,
+            mode: None,
+        };
+        let abbr = build_default_tables();
+        let step = compile_step(&def, &abbr).unwrap();
+        assert_eq!(step.label(), "test_rewrite");
+        assert_eq!(step.step_type(), "rewrite");
+        if let Step::Rewrite {
+            pattern_template, ..
+        } = &step
+        {
+            assert!(pattern_template.contains("{direction}"));
+        }
+    }
+
+    #[test]
+    fn test_compile_extract_step() {
+        use crate::tables::abbreviations::build_default_tables;
+        let def = StepDef {
+            step_type: "extract".to_string(),
+            label: "test_suffix".to_string(),
+            pattern: Some(r"(?<!^)\b({suffix_common})\s*$".to_string()),
+            replacement: None,
+            table: None,
+            target: Some("suffix".to_string()),
+            warning: None,
+            clear: None,
+            skip_if_filled: Some(true),
+            matching_table: None,
+            format_table: None,
+            mode: None,
+        };
+        let abbr = build_default_tables();
+        let step = compile_step(&def, &abbr).unwrap();
+        if let Step::Extract {
+            target,
+            skip_if_filled,
+            ..
+        } = &step
+        {
+            assert_eq!(*target, Field::Suffix);
+            assert!(*skip_if_filled);
+        } else {
+            panic!("Expected Extract step");
+        }
+    }
+
+    #[test]
+    fn test_compile_standardize_step() {
+        use crate::tables::abbreviations::build_default_tables;
+        let def = StepDef {
+            step_type: "standardize".to_string(),
+            label: "std_suffix".to_string(),
+            pattern: None,
+            replacement: None,
+            table: None,
+            target: Some("suffix".to_string()),
+            warning: None,
+            clear: None,
+            skip_if_filled: None,
+            matching_table: Some("suffix_all".to_string()),
+            format_table: Some("suffix_usps".to_string()),
+            mode: None,
+        };
+        let abbr = build_default_tables();
+        let step = compile_step(&def, &abbr).unwrap();
+        if let Step::Standardize {
+            target,
+            matching_table,
+            format_table,
+            mode,
+            ..
+        } = &step
+        {
+            assert_eq!(*target, Field::Suffix);
+            assert_eq!(matching_table.as_deref(), Some("suffix_all"));
+            assert_eq!(format_table.as_deref(), Some("suffix_usps"));
+            assert_eq!(*mode, StandardizeMode::WholeField);
+        } else {
+            panic!("Expected Standardize step");
+        }
+    }
+
+    #[test]
+    fn test_compile_all_default_steps() {
+        use crate::tables::abbreviations::build_default_tables;
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        let abbr = build_default_tables();
+        let steps = compile_steps(&defs.step, &abbr);
+        assert!(steps.len() > 20);
+        assert_eq!(steps[0].step_type(), "validate");
+        assert_eq!(steps[0].label(), "na_check");
     }
 }
