@@ -1,5 +1,7 @@
 //! DuckDB integration for reading/writing address tables.
 
+use std::time::Instant;
+
 use crate::address::Address;
 use crate::config::Config;
 use crate::pipeline::Pipeline;
@@ -146,6 +148,8 @@ pub fn run_duckdb(
     column: &str,
     overwrite: bool,
 ) -> Result<(), String> {
+    let total_start = Instant::now();
+
     let conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open database: {e}"))?;
 
@@ -157,16 +161,28 @@ pub fn run_duckdb(
         validate_output(&conn, output_table)?;
     }
 
+    let step = Instant::now();
     let addresses = read_addresses(&conn, input_table, column)?;
-    eprintln!("Read {} addresses from '{}'", addresses.len(), input_table);
+    let read_time = step.elapsed();
 
+    let step = Instant::now();
     let pipeline = Pipeline::from_config(config);
     let refs: Vec<&str> = addresses.iter().map(|s| s.as_str()).collect();
     let parsed = pipeline.parse_batch(&refs);
-    eprintln!("Parsed {} addresses", parsed.len());
+    let parse_time = step.elapsed();
 
+    let step = Instant::now();
     write_parsed(&conn, output_table, &addresses, &parsed)?;
-    eprintln!("Wrote results to '{}'", output_table);
+    let write_time = step.elapsed();
+
+    let total = total_start.elapsed();
+    let count = addresses.len();
+    let rate = count as f64 / total.as_secs_f64();
+
+    eprintln!(
+        "{} addresses: read {:.2?}, parse {:.2?}, write {:.2?}, total {:.2?} ({:.0} addr/sec)",
+        count, read_time, parse_time, write_time, total, rate
+    );
 
     Ok(())
 }
