@@ -36,6 +36,35 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
 }
 
 #[test]
+fn test_config_adds_custom_na_value() {
+    let config: Config = toml::from_str(
+        r#"
+[dictionaries.na_values]
+add = [{ short = "VACANT", long = "" }]
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("VACANT");
+    assert!(addr.warnings.contains(&"change_na_address".to_string()));
+}
+
+#[test]
+fn test_config_removes_na_value() {
+    let config: Config = toml::from_str(
+        r#"
+[dictionaries.na_values]
+remove = ["NULL"]
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("NULL");
+    // NULL should no longer trigger NA warning
+    assert!(!addr.warnings.contains(&"change_na_address".to_string()));
+}
+
+#[test]
 fn test_default_pipeline_matches_no_config() {
     let default_p = Pipeline::default();
     let config_p = Pipeline::from_config(&Config::default());

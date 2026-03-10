@@ -6,55 +6,86 @@ use crate::address::Field;
 use crate::pipeline::{Action, Rule};
 use crate::tables::abbreviations::Abbreviations;
 
+/// Expand all `{...}` placeholders in a template using abbreviation tables.
+///
+/// - `{table_name}` → `table.all_values().join("|")`
+/// - `{table_name$short}` → `table.short_values().join("|")`
+///
+/// Special cases:
+/// - `state` uses `bounded_regex()` (word-boundary-wrapped)
+/// - `unit_type` excludes `#` from `all_values()`
+///
+/// Regex quantifiers like `{5}` or `{1,6}` are left untouched.
+pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
+    let mut result = template.to_string();
+    let mut search_from = 0;
+    loop {
+        let start = match result[search_from..].find('{') {
+            Some(s) => search_from + s,
+            None => break,
+        };
+        let end = match result[start..].find('}') {
+            Some(e) => start + e,
+            None => break,
+        };
+        let placeholder = result[start + 1..end].to_string();
+
+        // Skip regex quantifiers like {5} or {1,6}
+        if placeholder.chars().all(|c| c.is_ascii_digit() || c == ',') {
+            search_from = end + 1;
+            continue;
+        }
+
+        let (table_name, accessor) = if let Some(idx) = placeholder.find('$') {
+            (&placeholder[..idx], Some(&placeholder[idx + 1..]))
+        } else {
+            (placeholder.as_str(), None)
+        };
+
+        if let Some(table) = abbr.get(table_name) {
+            let values = match (table_name, accessor) {
+                ("state", _) => table.bounded_regex(),
+                ("unit_type", None) => table
+                    .all_values()
+                    .into_iter()
+                    .filter(|v| *v != "#")
+                    .collect::<Vec<_>>()
+                    .join("|"),
+                (_, Some("short")) => table.short_values().join("|"),
+                _ => table.all_values().join("|"),
+            };
+            let before = &result[..start];
+            let after = &result[end + 1..];
+            let new_result = format!("{}{}{}", before, values, after);
+            search_from = start + values.len();
+            result = new_result;
+        } else {
+            // Unknown table — skip past to avoid infinite loop
+            search_from = end + 1;
+        }
+    }
+    result
+}
+
 /// Build the full ordered pipeline of rules.
 /// Extraction order: outside-in, most certain first.
 pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, String>) -> Vec<Rule> {
 
-    let dir_table = abbr.get("direction").unwrap();
-    let suffix_table = abbr.get("all_suffix").unwrap();
-    let common_suffix_table = abbr.get("common_suffix").unwrap();
-    let unit_type_table = abbr.get("unit_type").unwrap();
-    let unit_loc_table = abbr.get("unit_location").unwrap();
-    let state_table = abbr.get("state").unwrap();
-
-    let b_state = state_table.bounded_regex();
-
-    let nb_dir: String = dir_table.all_values().join("|");
-    let nb_common_suffix: String = common_suffix_table.all_values().join("|");
-    let nb_all_suffix: String = suffix_table.all_values().join("|");
-    let nb_unit_type: String = unit_type_table
-        .all_values()
-        .iter()
-        .filter(|v| **v != "#")
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("|");
-    let nb_unit_loc: String = unit_loc_table.all_values().join("|");
-
-    let mut table_values: HashMap<&str, &str> = HashMap::new();
-    table_values.insert("direction", &nb_dir);
-    table_values.insert("common_suffix", &nb_common_suffix);
-    table_values.insert("all_suffix", &nb_all_suffix);
-    table_values.insert("unit_type", &nb_unit_type);
-    table_values.insert("unit_location", &nb_unit_loc);
-    table_values.insert("state", &b_state);
-
     // Closure captures shared state — each call site only passes rule-specific args.
-    let rule = |label: &str, group: &str, pattern: &str, pattern_template: &str,
+    let rule = |label: &str, group: &str, pattern_template: &str,
                 action: Action, target: Option<Field>,
                 standardize: Option<(&str, &str)>, skip_if_filled: bool| -> Rule {
-        let (final_pattern, final_template) =
-            if let Some(override_template) = pattern_overrides.get(label) {
-                let mut expanded = override_template.clone();
-                for (name, values) in &table_values {
-                    expanded = expanded.replace(&format!("{{{}}}", name), values);
-                }
-                (expanded, override_template.clone())
-            } else {
-                (pattern.to_string(), pattern_template.to_string())
-            };
+        let final_template = pattern_overrides
+            .get(label)
+            .cloned()
+            .unwrap_or_else(|| pattern_template.to_string());
 
-        let std = standardize.map(|(m, r)| (Regex::new(m).unwrap(), r.to_string()));
+        let final_pattern = expand_template(&final_template, abbr);
+
+        let std = standardize.map(|(m, r)| {
+            let expanded_m = expand_template(m, abbr);
+            (Regex::new(&expanded_m).unwrap(), r.to_string())
+        });
         Rule {
             label: label.to_string(),
             group: group.to_string(),
@@ -77,8 +108,7 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_na_address",
         "na_check",
-        r"(?i)^(N/?A|NULL|NAN|MISSING|NONE|UNKNOWN|NO ADDRESS)$",
-        r"(?i)^(N/?A|NULL|NAN|MISSING|NONE|UNKNOWN|NO ADDRESS)$",
+        r"(?i)^(N/?A|{na_values})$",
         Action::Warn,
         None,
         None,
@@ -91,10 +121,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "city_state_zip",
         "city_state",
-        &format!(
-            r",\s*([A-Z][A-Z ]+)\W+{}\W+(\d{{5}}(?:\W\d{{4}})?)(?:\s*US)?$",
-            b_state
-        ),
         r",\s*([A-Z][A-Z ]+)\W+{state}\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$",
         Action::Extract,
         Some(Field::ExtraBack),
@@ -109,7 +135,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
         "po_box_number",
         "po_box",
         r"\bP\W*O\W+?BOX\W*(\d+)\b",
-        r"\bP\W*O\W+?BOX\W*(\d+)\b",
         Action::Extract,
         Some(Field::PoBox),
         Some((r"P\W*O\W+?BOX\W*(\d+)", "PO BOX $1")),
@@ -118,7 +143,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "po_box_word",
         "po_box",
-        r"\bP\W*O\W+?BOX\W+(\w+)\b",
         r"\bP\W*O\W+?BOX\W+(\w+)\b",
         Action::Extract,
         Some(Field::PoBox),
@@ -133,11 +157,10 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_unstick_suffix_unit",
         "pre_check",
-        &format!(r"\b({nb_common_suffix})({nb_unit_type})\b"),
         r"\b({common_suffix})({unit_type})\b",
         Action::Change,
         None,
-        Some((&format!(r"({nb_common_suffix})({nb_unit_type})"), "$1 $2")),
+        Some((r"({common_suffix})({unit_type})", "$1 $2")),
         false,
     ));
 
@@ -147,14 +170,11 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_st_to_saint",
         "pre_check",
-        &format!(
-            r"^(\d{{1,6}}\s(?:(?:{nb_dir})\s)?)ST\s(?!(?:{nb_unit_loc}|{nb_unit_type}|{nb_all_suffix})\b)([A-Z]{{3,20}})"
-        ),
         r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{all_suffix})\b)([A-Z]{3,20})",
         Action::Change,
         None,
         Some((
-            &format!(r"^(\d{{1,6}}\s(?:(?:{nb_dir})\s)?)ST\s(?!(?:{nb_unit_loc}|{nb_unit_type}|{nb_all_suffix})\b)([A-Z]{{3,20}})"),
+            r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{all_suffix})\b)([A-Z]{3,20})",
             "${1}SAINT $2",
         )),
         false,
@@ -166,7 +186,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "extra_front",
         "extra",
-        &format!(r"^(?:(?:[A-Z\W]+\s)+(?=(?:{nb_dir})\s\d))|^(?:(?:[A-Z\W]+\s)+(?=\d))"),
         r"^(?:(?:[A-Z\W]+\s)+(?=(?:{direction})\s\d))|^(?:(?:[A-Z\W]+\s)+(?=\d))",
         Action::Extract,
         Some(Field::ExtraFront),
@@ -182,7 +201,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
         "street_number_coords_two",
         "street_number",
         r"^([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)\b",
-        r"^([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)\b",
         Action::Extract,
         Some(Field::StreetNumber),
         Some((r"([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)", "${1}${2} ${3}${4}")),
@@ -192,7 +210,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "street_number_simple",
         "street_number",
-        r"^\d+\b",
         r"^\d+\b",
         Action::Extract,
         Some(Field::StreetNumber),
@@ -204,7 +221,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "unit_fraction",
         "street_number",
-        r"^[1-9]/\d+\b",
         r"^[1-9]/\d+\b",
         Action::Extract,
         Some(Field::Unit),
@@ -219,9 +235,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "unit_type_value",
         "unit",
-        &format!(
-            r"(?:\b({nb_unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$"
-        ),
         r"(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$",
         Action::Extract,
         Some(Field::Unit),
@@ -233,7 +246,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
         "unit_pound",
         "unit",
         r"#\W*(\w+)\s*$",
-        r"#\W*(\w+)\s*$",
         Action::Extract,
         Some(Field::Unit),
         None,
@@ -243,7 +255,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "unit_location",
         "unit",
-        &format!(r"\b({nb_unit_loc})\s*$"),
         r"\b({unit_location})\s*$",
         Action::Extract,
         Some(Field::Unit),
@@ -257,7 +268,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "post_direction",
         "direction",
-        &format!(r"(?<!^)\b({nb_dir})\s*$"),
         r"(?<!^)\b({direction})\s*$",
         Action::Extract,
         Some(Field::PostDirection),
@@ -272,7 +282,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "suffix_common",
         "suffix",
-        &format!(r"(?<!^)\b({nb_common_suffix})\s*$"),
         r"(?<!^)\b({common_suffix})\s*$",
         Action::Extract,
         Some(Field::Suffix),
@@ -283,7 +292,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "suffix_all",
         "suffix",
-        &format!(r"(?<!^)\b({nb_all_suffix})\s*$"),
         r"(?<!^)\b({all_suffix})\s*$",
         Action::Extract,
         Some(Field::Suffix),
@@ -297,7 +305,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "pre_direction",
         "direction",
-        &format!(r"^\b({nb_dir})\b(?!$)"),
         r"^\b({direction})\b(?!$)",
         Action::Extract,
         Some(Field::PreDirection),
@@ -312,7 +319,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
         "change_name_mt_to_mount",
         "street_name",
         r"\bMT\b",
-        r"\bMT\b",
         Action::Change,
         None,
         Some((r"\bMT\b", "MOUNT")),
@@ -321,7 +327,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     rules.push(rule(
         "change_name_ft_to_fort",
         "street_name",
-        r"\bFT\b",
         r"\bFT\b",
         Action::Change,
         None,
@@ -333,7 +338,6 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
         "change_name_st_to_saint",
         "street_name",
         r"(?:^|\s)ST\b(?=\s[A-Z]{3,})",
-        r"(?:^|\s)ST\b(?=\s[A-Z]{3,})",
         Action::Change,
         None,
         Some((r"(?:^|\b)ST\b(?=\s[A-Z]{3,})", "SAINT")),
@@ -341,4 +345,67 @@ pub fn build_rules(abbr: &Abbreviations, pattern_overrides: &HashMap<String, Str
     ));
 
     rules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tables::abbreviations::build_default_tables;
+
+    #[test]
+    fn test_expand_template_all_values() {
+        let abbr = build_default_tables();
+        let expanded = expand_template("{direction}", &abbr);
+        assert!(expanded.contains("NORTH"));
+        assert!(expanded.contains("NE"));
+    }
+
+    #[test]
+    fn test_expand_template_short_accessor() {
+        let abbr = build_default_tables();
+        let expanded = expand_template("{direction$short}", &abbr);
+        assert!(expanded.contains("NE"));
+        assert!(!expanded.contains("NORTH"));
+    }
+
+    #[test]
+    fn test_expand_template_state_bounded() {
+        let abbr = build_default_tables();
+        let expanded = expand_template("{state}", &abbr);
+        assert!(expanded.starts_with(r"\b("));
+    }
+
+    #[test]
+    fn test_expand_template_unit_type_excludes_hash() {
+        let abbr = build_default_tables();
+        let expanded = expand_template("{unit_type}", &abbr);
+        assert!(!expanded.contains("#"));
+        assert!(expanded.contains("APARTMENT"));
+    }
+
+    #[test]
+    fn test_expand_template_regex_quantifiers_preserved() {
+        let abbr = build_default_tables();
+        let expanded = expand_template(r"\d{5}(?:\W\d{4})?", &abbr);
+        assert_eq!(expanded, r"\d{5}(?:\W\d{4})?");
+    }
+
+    #[test]
+    fn test_expand_template_mixed() {
+        let abbr = build_default_tables();
+        let expanded = expand_template(
+            r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s([A-Z]{3,20})",
+            &abbr,
+        );
+        assert!(expanded.contains("NORTH"));
+        assert!(expanded.contains(r"\d{1,6}"));
+        assert!(expanded.contains(r"[A-Z]{3,20}"));
+    }
+
+    #[test]
+    fn test_build_rules_count() {
+        let abbr = build_default_tables();
+        let rules = build_rules(&abbr, &HashMap::new());
+        assert!(rules.len() > 10);
+    }
 }
