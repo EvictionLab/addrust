@@ -41,6 +41,16 @@ impl OutputConfig {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
+
+    pub fn format_for_field(&self, field: crate::address::Field) -> OutputFormat {
+        use crate::address::Field;
+        match field {
+            Field::Suffix => self.suffix,
+            Field::PreDirection | Field::PostDirection => self.direction,
+            Field::Unit => self.unit_location,
+            _ => OutputFormat::Long,
+        }
+    }
 }
 
 fn is_long(f: &OutputFormat) -> bool { *f == OutputFormat::Long }

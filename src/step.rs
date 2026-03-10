@@ -2,6 +2,9 @@ use fancy_regex::Regex;
 use serde::Deserialize;
 
 use crate::address::Field;
+use crate::config::OutputFormat;
+use crate::ops::{extract_remove, none_if_empty, replace_pattern, squish};
+use crate::tables::abbreviations::AbbrTable;
 use crate::tables::expand_template;
 use crate::tables::Abbreviations;
 
@@ -98,6 +101,121 @@ impl Step {
             Step::Rewrite { .. } => "rewrite",
             Step::Extract { .. } => "extract",
             Step::Standardize { .. } => "standardize",
+        }
+    }
+}
+
+fn standardize_value(
+    value: &str,
+    matching_table: &AbbrTable,
+    canonical_table: &AbbrTable,
+    format: OutputFormat,
+) -> String {
+    let short = matching_table.to_short(value).unwrap_or(value);
+    match format {
+        OutputFormat::Short => short.to_string(),
+        OutputFormat::Long => canonical_table
+            .to_long(short)
+            .unwrap_or(short)
+            .to_string(),
+    }
+}
+
+pub fn apply_step(
+    state: &mut crate::address::AddressState,
+    step: &Step,
+    tables: &Abbreviations,
+    output: &crate::config::OutputConfig,
+) {
+    if !step.enabled() {
+        return;
+    }
+
+    match step {
+        Step::Validate { pattern, warning, clear, .. } => {
+            if pattern.is_match(&state.working).unwrap_or(false) {
+                state.fields.warnings.push(warning.clone());
+                if *clear {
+                    state.working.clear();
+                }
+            }
+        }
+        Step::Rewrite { pattern, replacement, rewrite_table, .. } => {
+            if !pattern.is_match(&state.working).unwrap_or(false) {
+                return;
+            }
+            if let Some(table_name) = rewrite_table {
+                if let Some(table) = tables.get(table_name) {
+                    for (short, long) in table.short_to_long_pairs() {
+                        let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
+                        replace_pattern(&mut state.working, &re, &long);
+                    }
+                }
+            } else if let Some(repl) = replacement {
+                replace_pattern(&mut state.working, pattern, repl);
+            }
+            squish(&mut state.working);
+        }
+        Step::Extract { pattern, target, skip_if_filled, replacement, .. } => {
+            if *skip_if_filled {
+                if state.fields.field(*target).is_some() {
+                    return;
+                }
+            }
+            if let Some(mut val) = extract_remove(&mut state.working, pattern) {
+                if let Some((re, repl)) = replacement {
+                    replace_pattern(&mut val, re, repl);
+                }
+                *state.fields.field_mut(*target) = none_if_empty(val);
+            }
+        }
+        Step::Standardize { target, matching_table, format_table, pattern, mode, .. } => {
+            // Handle regex-based standardize (like po_box)
+            if let Some((re, repl)) = pattern {
+                if let Some(val) = state.fields.field(*target) {
+                    let mut result = val.clone();
+                    replace_pattern(&mut result, re, repl);
+                    *state.fields.field_mut(*target) = none_if_empty(result);
+                }
+                return;
+            }
+
+            // Table-based standardize
+            let val = match state.fields.field(*target) {
+                Some(v) => v.to_string(),
+                None => return,
+            };
+            let m_name = match matching_table {
+                Some(n) => n,
+                None => return,
+            };
+            let f_name = match format_table {
+                Some(n) => n,
+                None => return,
+            };
+            let m = match tables.get(m_name) {
+                Some(t) => t,
+                None => return,
+            };
+            let c = match tables.get(f_name) {
+                Some(t) => t,
+                None => return,
+            };
+            let fmt = output.format_for_field(*target);
+
+            match mode {
+                StandardizeMode::WholeField => {
+                    *state.fields.field_mut(*target) = Some(standardize_value(&val, m, c, fmt));
+                }
+                StandardizeMode::PerWord => {
+                    let mut result = val.clone();
+                    for (short, long) in m.short_to_long_pairs() {
+                        let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
+                        replace_pattern(&mut result, &re, &long);
+                    }
+                    *state.fields.field_mut(*target) = none_if_empty(result);
+                }
+            }
         }
     }
 }
@@ -556,5 +674,118 @@ mode = "whole_field"
         assert!(steps.len() > 20);
         assert_eq!(steps[0].step_type(), "validate");
         assert_eq!(steps[0].label(), "na_check");
+    }
+
+    #[test]
+    fn test_apply_validate_step() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let toml_str = r#"
+[[step]]
+type = "validate"
+label = "na_check"
+pattern = '(?i)^(N/?A)$'
+warning = "na_address"
+clear = true
+"#;
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        let steps = compile_steps(&defs.step, &abbr);
+        let mut state = AddressState::new_from_prepared("N/A".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &steps[0], &abbr, &output);
+        assert!(state.fields.warnings.contains(&"na_address".to_string()));
+        assert!(state.working.is_empty());
+    }
+
+    #[test]
+    fn test_apply_rewrite_step() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let def = StepDef {
+            step_type: "rewrite".to_string(),
+            label: "test_rewrite".to_string(),
+            pattern: Some(r"STAPT".to_string()),
+            replacement: Some("ST APT".to_string()),
+            table: None, target: None, warning: None, clear: None,
+            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+        };
+        let step = compile_step(&def, &abbr).unwrap();
+        let mut state = AddressState::new_from_prepared("123 N STAPT 4B".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &step, &abbr, &output);
+        assert_eq!(state.working, "123 N ST APT 4B");
+    }
+
+    #[test]
+    fn test_apply_rewrite_from_table() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let toml_str = r#"
+[[step]]
+type = "rewrite"
+label = "street_name_abbr"
+pattern = '\b({street_name_abbr$short})\b'
+table = "street_name_abbr"
+"#;
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        let steps = compile_steps(&defs.step, &abbr);
+        let mut state = AddressState::new_from_prepared("MT VERNON".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &steps[0], &abbr, &output);
+        assert_eq!(state.working, "MOUNT VERNON");
+    }
+
+    #[test]
+    fn test_apply_extract_step() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let def = StepDef {
+            step_type: "extract".to_string(),
+            label: "test_number".to_string(),
+            pattern: Some(r"^\d+\b".to_string()),
+            replacement: None,
+            table: None, target: Some("street_number".to_string()),
+            warning: None, clear: None,
+            skip_if_filled: Some(true),
+            matching_table: None, format_table: None, mode: None,
+        };
+        let step = compile_step(&def, &abbr).unwrap();
+        let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &step, &abbr, &output);
+        assert_eq!(state.fields.street_number.as_deref(), Some("123"));
+        assert_eq!(state.working, "MAIN ST");
+    }
+
+    #[test]
+    fn test_apply_standardize_step() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let def = StepDef {
+            step_type: "standardize".to_string(),
+            label: "std_suffix".to_string(),
+            pattern: None, replacement: None, table: None,
+            target: Some("suffix".to_string()),
+            warning: None, clear: None, skip_if_filled: None,
+            matching_table: Some("suffix_all".to_string()),
+            format_table: Some("suffix_usps".to_string()),
+            mode: None,
+        };
+        let step = compile_step(&def, &abbr).unwrap();
+        let mut state = AddressState::new_from_prepared(String::new());
+        state.fields.suffix = Some("ST".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &step, &abbr, &output);
+        assert_eq!(state.fields.suffix.as_deref(), Some("STREET"));
     }
 }
