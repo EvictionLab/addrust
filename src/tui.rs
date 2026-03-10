@@ -74,21 +74,6 @@ struct StepState {
     default_enabled: bool,
 }
 
-impl StepState {
-    fn from_step_summaries(
-        current: &crate::pipeline::StepSummary,
-        default: &crate::pipeline::StepSummary,
-    ) -> Self {
-        Self {
-            label: current.label.clone(),
-            group: current.step_type.clone(),
-            action_desc: current.step_type.clone(),
-            pattern_template: current.pattern_template.clone().unwrap_or_default(),
-            enabled: current.enabled,
-            default_enabled: default.enabled,
-        }
-    }
-}
 
 /// Full TUI application state.
 struct App {
