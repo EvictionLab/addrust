@@ -3,6 +3,49 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::io;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    Short,
+    Long,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct OutputConfig {
+    #[serde(skip_serializing_if = "is_long")]
+    pub suffix: OutputFormat,
+    #[serde(skip_serializing_if = "is_short")]
+    pub direction: OutputFormat,
+    #[serde(skip_serializing_if = "is_long")]
+    pub unit_type: OutputFormat,
+    #[serde(skip_serializing_if = "is_long")]
+    pub unit_location: OutputFormat,
+    #[serde(skip_serializing_if = "is_short")]
+    pub state: OutputFormat,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            suffix: OutputFormat::Long,
+            direction: OutputFormat::Short,
+            unit_type: OutputFormat::Long,
+            unit_location: OutputFormat::Long,
+            state: OutputFormat::Short,
+        }
+    }
+}
+
+impl OutputConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+fn is_long(f: &OutputFormat) -> bool { *f == OutputFormat::Long }
+fn is_short(f: &OutputFormat) -> bool { *f == OutputFormat::Short }
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct Config {
@@ -10,6 +53,8 @@ pub struct Config {
     pub rules: RulesConfig,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub dictionaries: HashMap<String, DictOverrides>,
+    #[serde(default, skip_serializing_if = "OutputConfig::is_default")]
+    pub output: OutputConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -214,5 +259,58 @@ unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
         let unit = parsed.dictionaries.get("unit_type").unwrap();
         assert_eq!(unit.add.len(), 1);
         assert_eq!(unit.override_entries.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_output_config() {
+        let toml_str = r#"
+[output]
+suffix = "short"
+direction = "long"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.output.suffix, OutputFormat::Short);
+        assert_eq!(config.output.direction, OutputFormat::Long);
+        assert_eq!(config.output.unit_type, OutputFormat::Long);
+        assert_eq!(config.output.state, OutputFormat::Short);
+    }
+
+    #[test]
+    fn test_output_config_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.output.suffix, OutputFormat::Long);
+        assert_eq!(config.output.direction, OutputFormat::Short);
+        assert_eq!(config.output.unit_type, OutputFormat::Long);
+        assert_eq!(config.output.unit_location, OutputFormat::Long);
+        assert_eq!(config.output.state, OutputFormat::Short);
+    }
+
+    #[test]
+    fn test_serialize_output_config_only_non_defaults() {
+        let mut config = Config::default();
+        config.output.suffix = OutputFormat::Short;
+        let toml_str = config.to_toml();
+        assert!(toml_str.contains("[output]"));
+        assert!(toml_str.contains("suffix"));
+        assert!(!toml_str.contains("direction"));
+    }
+
+    #[test]
+    fn test_roundtrip_output_config() {
+        let mut config = Config::default();
+        config.output.suffix = OutputFormat::Short;
+        config.output.direction = OutputFormat::Long;
+        let toml_str = config.to_toml();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.output.suffix, OutputFormat::Short);
+        assert_eq!(parsed.output.direction, OutputFormat::Long);
+        assert_eq!(parsed.output.unit_type, OutputFormat::Long);
+    }
+
+    #[test]
+    fn test_empty_config_no_output_section() {
+        let config = Config::default();
+        let toml_str = config.to_toml();
+        assert!(!toml_str.contains("[output]"));
     }
 }
