@@ -336,4 +336,25 @@ step_order = ["suffix_common", "na_check"]
         assert_eq!(summaries[2].label, "city_state_zip");
         assert_eq!(summaries[3].label, "po_box");
     }
+
+    #[test]
+    fn test_step_order_with_disabled_and_overrides() {
+        // Combine all three config features
+        let toml_str = r#"
+[steps]
+disabled = ["na_check"]
+step_order = ["po_box", "na_check", "city_state_zip"]
+
+[steps.pattern_overrides]
+po_box = '(?i)P\.?\s*O\.?\s*BOX\s+(\w+)'
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let summaries = p.step_summaries();
+        // po_box first, na_check second (disabled), city_state_zip third
+        assert_eq!(summaries[0].label, "po_box");
+        assert_eq!(summaries[1].label, "na_check");
+        assert!(!summaries[1].enabled); // na_check is disabled
+        assert_eq!(summaries[2].label, "city_state_zip");
+    }
 }
