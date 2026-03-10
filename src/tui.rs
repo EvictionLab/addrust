@@ -74,22 +74,6 @@ struct StepState {
     default_enabled: bool,
 }
 
-impl StepState {
-    fn from_step_summaries(
-        current: &crate::pipeline::StepSummary,
-        default: &crate::pipeline::StepSummary,
-    ) -> Self {
-        Self {
-            label: current.label.clone(),
-            group: current.step_type.clone(),
-            action_desc: current.step_type.clone(),
-            pattern_template: current.pattern_template.clone().unwrap_or_default(),
-            enabled: current.enabled,
-            default_enabled: default.enabled,
-        }
-    }
-}
-
 /// Full TUI application state.
 struct App {
     /// Path to save config to.
@@ -105,6 +89,10 @@ struct App {
     // -- Rules tab --
     steps: Vec<StepState>,
     steps_list_state: ListState,
+    /// If Some, we're in move mode — value is the index of the step being moved.
+    moving_step: Option<usize>,
+    /// Original index before move started, for Esc cancel.
+    moving_step_origin: Option<usize>,
 
     // -- Step detail view --
     /// If Some, we're viewing/editing a step's detail (index into steps vec).
@@ -140,10 +128,28 @@ impl App {
         let default_summaries = default_pipeline.step_summaries();
         let config_summaries = pipeline.step_summaries();
 
+        // Use label-based lookup for default_enabled (not positional zip)
+        let default_enabled_map: std::collections::HashMap<&str, bool> = default_summaries
+            .iter()
+            .map(|s| (s.label.as_str(), s.enabled))
+            .collect();
+
         let steps: Vec<StepState> = config_summaries
             .iter()
-            .zip(default_summaries.iter())
-            .map(|(current, default)| StepState::from_step_summaries(current, default))
+            .map(|current| {
+                let default_enabled = default_enabled_map
+                    .get(current.label.as_str())
+                    .copied()
+                    .unwrap_or(true);
+                StepState {
+                    label: current.label.clone(),
+                    group: current.step_type.clone(),
+                    action_desc: current.step_type.clone(),
+                    pattern_template: current.pattern_template.clone().unwrap_or_default(),
+                    enabled: current.enabled,
+                    default_enabled,
+                }
+            })
             .collect();
 
         let mut steps_list_state = ListState::default();
@@ -271,6 +277,8 @@ impl App {
             active_tab: Tab::Steps,
             steps,
             steps_list_state,
+            moving_step: None,
+            moving_step_origin: None,
             step_detail_index: None,
             step_detail_segments: Vec::new(),
             step_detail_selected: 0,
@@ -298,17 +306,32 @@ impl App {
             .collect();
         config.steps.disabled = disabled;
 
-        // Pattern overrides: collect modified templates
+        // Pattern overrides: compare by label (not position) since steps may be reordered
         let default_pipeline = Pipeline::default();
         let default_summaries = default_pipeline.step_summaries();
-        for (step, default) in self.steps.iter().zip(default_summaries.iter()) {
-            let default_template = default.pattern_template.as_deref().unwrap_or("");
+        let default_patterns: std::collections::HashMap<&str, &str> = default_summaries
+            .iter()
+            .map(|s| (s.label.as_str(), s.pattern_template.as_deref().unwrap_or("")))
+            .collect();
+
+        for step in &self.steps {
+            let default_template = default_patterns
+                .get(step.label.as_str())
+                .copied()
+                .unwrap_or("");
             if step.pattern_template != default_template {
                 config.steps.pattern_overrides.insert(
                     step.label.clone(),
                     step.pattern_template.clone(),
                 );
             }
+        }
+
+        // Step order: only store if different from default
+        let default_order: Vec<&str> = default_summaries.iter().map(|s| s.label.as_str()).collect();
+        let current_order: Vec<&str> = self.steps.iter().map(|s| s.label.as_str()).collect();
+        if current_order != default_order {
+            config.steps.step_order = self.steps.iter().map(|s| s.label.clone()).collect();
         }
 
         // Dictionaries: collect changes per table
@@ -432,6 +455,12 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 continue;
             }
 
+            // Move mode: only step handler processes keys
+            if app.moving_step.is_some() && app.active_tab == Tab::Steps {
+                handle_rules_key(app, key.code);
+                continue;
+            }
+
             // Normal mode
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -480,6 +509,47 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
     if len == 0 {
         return;
     }
+
+    // Move mode: step is grabbed, arrow keys reposition it
+    if let Some(moving_idx) = app.moving_step {
+        match code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if moving_idx + 1 < len {
+                    app.steps.swap(moving_idx, moving_idx + 1);
+                    let new_idx = moving_idx + 1;
+                    app.moving_step = Some(new_idx);
+                    app.steps_list_state.select(Some(new_idx));
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if moving_idx > 0 {
+                    app.steps.swap(moving_idx, moving_idx - 1);
+                    let new_idx = moving_idx - 1;
+                    app.moving_step = Some(new_idx);
+                    app.steps_list_state.select(Some(new_idx));
+                }
+            }
+            KeyCode::Enter => {
+                app.moving_step = None;
+                app.moving_step_origin = None;
+                app.dirty = true;
+            }
+            KeyCode::Esc => {
+                // Cancel: remove from current position, re-insert at origin
+                if let Some(origin) = app.moving_step_origin {
+                    let step = app.steps.remove(moving_idx);
+                    app.steps.insert(origin, step);
+                    app.steps_list_state.select(Some(origin));
+                }
+                app.moving_step = None;
+                app.moving_step_origin = None;
+            }
+            _ => {} // All other keys ignored in move mode
+        }
+        return;
+    }
+
+    // Normal mode
     match code {
         KeyCode::Down | KeyCode::Char('j') => {
             let i = app.steps_list_state.selected().unwrap_or(0);
@@ -503,6 +573,12 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
                 app.step_detail_segments = segments;
                 app.step_detail_selected = 0;
                 app.step_detail_alt_selected = None;
+            }
+        }
+        KeyCode::Char('m') => {
+            if let Some(i) = app.steps_list_state.selected() {
+                app.moving_step = Some(i);
+                app.moving_step_origin = Some(i);
             }
         }
         _ => {}
@@ -896,10 +972,14 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     // Status bar
     let dirty_indicator = if app.dirty { " [modified]" } else { "" };
-    let status_text = format!(
-        " Tab: switch | j/k: navigate | Space: toggle | a: add | d: delete | Enter: edit | s: save | q: quit{}",
-        dirty_indicator
-    );
+    let status_text = if app.moving_step.is_some() {
+        format!(" ↑↓: move | Enter: confirm | Esc: cancel{}", dirty_indicator)
+    } else {
+        format!(
+            " Tab: switch | j/k: navigate | Space: toggle | m: move | a: add | d: delete | Enter: edit | s: save | q: quit{}",
+            dirty_indicator
+        )
+    };
     let status = Paragraph::new(status_text)
         .style(Style::new().bg(Color::DarkGray).fg(Color::White));
     frame.render_widget(status, status_area);
@@ -961,27 +1041,36 @@ fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let items: Vec<ListItem> = app
         .steps
         .iter()
-        .map(|r| {
+        .enumerate()
+        .map(|(idx, r)| {
+            let is_moving = app.moving_step == Some(idx);
             let check = if r.enabled { " " } else { "x" };
-            let style = if !r.enabled {
+            let style = if is_moving {
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if !r.enabled {
                 Style::new().fg(Color::DarkGray)
             } else if r.enabled != r.default_enabled {
                 Style::new().fg(Color::Yellow)
             } else {
                 Style::new()
             };
+            let check_style = if is_moving {
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else if r.enabled {
+                Style::new().fg(Color::Green)
+            } else {
+                Style::new().fg(Color::Red)
+            };
+            let pattern_style = if is_moving {
+                Style::new().fg(Color::Yellow)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
             ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", check),
-                    if r.enabled {
-                        Style::new().fg(Color::Green)
-                    } else {
-                        Style::new().fg(Color::Red)
-                    },
-                ),
+                Span::styled(format!("[{}] ", check), check_style),
                 Span::styled(format!("{:30} ", r.label), style),
-                Span::styled(format!("{:8} ", r.action_desc), Style::new().fg(Color::DarkGray)),
-                Span::styled(&r.pattern_template, Style::new().fg(Color::DarkGray)),
+                Span::styled(format!("{:8} ", r.action_desc), if is_moving { style } else { Style::new().fg(Color::DarkGray) }),
+                Span::styled(&r.pattern_template, pattern_style),
             ]))
         })
         .collect();
