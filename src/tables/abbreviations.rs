@@ -353,6 +353,24 @@ fn build_all_suffixes() -> AbbrTable {
     AbbrTable::new(entries)
 }
 
+fn build_na_values() -> AbbrTable {
+    AbbrTable::new(vec![
+        abbr("NULL", ""),
+        abbr("NAN", ""),
+        abbr("MISSING", ""),
+        abbr("NONE", ""),
+        abbr("UNKNOWN", ""),
+        abbr("NO ADDRESS", ""),
+    ])
+}
+
+fn build_street_name_abbr() -> AbbrTable {
+    AbbrTable::new(vec![
+        abbr("MT", "MOUNT"),
+        abbr("FT", "FORT"),
+    ])
+}
+
 fn build_common_suffixes() -> AbbrTable {
     // Common suffixes: USPS standard short → long form only.
     // These are suffixes frequent enough to extract confidently
@@ -385,6 +403,8 @@ pub fn build_default_tables() -> Abbreviations {
     tables.insert("usps_suffix".to_string(), build_usps_suffixes());
     tables.insert("all_suffix".to_string(), build_all_suffixes());
     tables.insert("common_suffix".to_string(), build_common_suffixes());
+    tables.insert("na_values".to_string(), build_na_values());
+    tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
     Abbreviations { tables }
 }
 
@@ -398,6 +418,8 @@ pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(|| {
     tables.insert("usps_suffix".to_string(), build_usps_suffixes());
     tables.insert("all_suffix".to_string(), build_all_suffixes());
     tables.insert("common_suffix".to_string(), build_common_suffixes());
+    tables.insert("na_values".to_string(), build_na_values());
+    tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
     Abbreviations { tables }
 });
 
@@ -473,6 +495,25 @@ mod tests {
         let vals = table.all_values();
         assert_eq!(vals, vec!["NULL", "NAN"]);
         assert!(!vals.contains(&""));
+    }
+
+    #[test]
+    fn test_na_values_table_exists() {
+        let tables = build_default_tables();
+        let na = tables.get("na_values").unwrap();
+        assert!(na.is_value_list());
+        let vals = na.all_values();
+        assert!(vals.contains(&"NULL"));
+        assert!(vals.contains(&"NO ADDRESS"));
+    }
+
+    #[test]
+    fn test_street_name_abbr_table_exists() {
+        let tables = build_default_tables();
+        let sna = tables.get("street_name_abbr").unwrap();
+        assert!(!sna.is_value_list());
+        assert_eq!(sna.to_long("MT"), Some("MOUNT"));
+        assert_eq!(sna.to_long("FT"), Some("FORT"));
     }
 
     #[test]
