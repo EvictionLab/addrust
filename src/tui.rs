@@ -1039,26 +1039,36 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     ])
     .areas(area);
 
-    // Sub-tabs for table names
-    let subtab_titles: Vec<String> = app
-        .table_names
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let count = app.dict_entries[i].len();
-            format!("{} ({})", name, count)
-        })
-        .collect();
-    let subtabs = Tabs::new(subtab_titles)
+    // Sub-tab display: show current table with navigation context
+    let num_tables = app.table_names.len();
+    let idx = app.dict_tab_index;
+    let count = app.dict_entries[idx].len();
+    let current_name = &app.table_names[idx];
+
+    let prev_hint = if idx > 0 {
+        format!("< {} ", app.table_names[idx - 1])
+    } else {
+        String::new()
+    };
+    let next_hint = if idx + 1 < num_tables {
+        format!(" {} >", app.table_names[idx + 1])
+    } else {
+        String::new()
+    };
+
+    let subtab_line = Line::from(vec![
+        Span::styled(prev_hint, Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{} ({}) [{}/{}]", current_name, count, idx + 1, num_tables),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(next_hint, Style::new().fg(Color::DarkGray)),
+    ]);
+
+    let subtab_widget = Paragraph::new(subtab_line)
         .block(Block::bordered().title("Tables (left/right to switch)"))
-        .select(app.dict_tab_index)
-        .highlight_style(
-            Style::new()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        )
-        .divider(" | ");
-    frame.render_widget(subtabs, subtab_area);
+        .alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(subtab_widget, subtab_area);
 
     // Entries — build items from immutable borrow, then drop it before mutable borrow
     let is_value_list = {
