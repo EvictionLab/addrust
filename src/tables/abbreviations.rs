@@ -280,30 +280,24 @@ fn build_states() -> AbbrTable {
 }
 
 fn build_usps_suffixes() -> AbbrTable {
-    // Parse the embedded USPS CSV
+    // Parse the USPS CSV into a 1:1 mapping: USPS short ↔ primary name.
+    // Each short code gets exactly one long form (the primary suffix name).
     let csv = include_str!("../../data/usps-street-suffix.csv");
+    let mut seen = std::collections::HashSet::new();
     let mut entries = Vec::new();
 
     for line in csv.lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
         if cols.len() >= 3 {
-            let long = cols[0].trim();   // primary name (e.g., AVENUE)
-            let common = cols[1].trim(); // common variant (e.g., AV)
-            let short = cols[2].trim();  // USPS standard (e.g., AVE)
+            let long = cols[0].trim();
+            let short = cols[2].trim();
 
-            // long → short mapping (the official USPS abbreviation)
-            if long != short {
+            // One entry per short code — first occurrence (primary name) wins
+            if seen.insert(short.to_string()) {
                 entries.push(abbr(short, long));
-            }
-            // common → short mapping (variant to official)
-            if common != short && common != long {
-                entries.push(abbr(short, common));
             }
         }
     }
-
-    // Deduplicate
-    entries.dedup_by(|a, b| a.short == b.short && a.long == b.long);
 
     AbbrTable::new(entries)
 }
@@ -525,5 +519,31 @@ mod tests {
         let shorts = table.short_values();
         // Sorted by length descending
         assert_eq!(shorts, vec!["AVE", "ST"]);
+    }
+
+    #[test]
+    fn test_suffix_usps_is_one_to_one() {
+        let tables = build_default_tables();
+        let usps = tables.get("suffix_usps").unwrap();
+        let mut seen_shorts = std::collections::HashSet::new();
+        for entry in &usps.entries {
+            if seen_shorts.contains(&entry.short) {
+                panic!("Duplicate short in suffix_usps: {} (long: {})", entry.short, entry.long);
+            }
+            seen_shorts.insert(entry.short.clone());
+            assert!(!entry.long.is_empty(), "Empty long for short: {}", entry.short);
+        }
+    }
+
+    #[test]
+    fn test_suffix_usps_bidirectional() {
+        let tables = build_default_tables();
+        let usps = tables.get("suffix_usps").unwrap();
+        assert_eq!(usps.to_long("AVE"), Some("AVENUE"));
+        assert_eq!(usps.to_short("AVENUE"), Some("AVE"));
+        assert_eq!(usps.to_long("DR"), Some("DRIVE"));
+        assert_eq!(usps.to_short("DRIVE"), Some("DR"));
+        assert_eq!(usps.to_long("ST"), Some("STREET"));
+        assert_eq!(usps.to_short("STREET"), Some("ST"));
     }
 }
