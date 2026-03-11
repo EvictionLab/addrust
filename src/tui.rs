@@ -48,8 +48,6 @@ struct WizardAccumulator {
     replacement: Option<String>,
     table: Option<String>,
     skip_if_filled: Option<bool>,
-    matching_table: Option<String>,
-    format_table: Option<String>,
     mode: Option<String>,
 }
 
@@ -71,8 +69,8 @@ enum WizardState {
     RewriteMode(usize),
     TableName(String, usize),
     StandardizeMode(usize),
-    MatchingTable(String, usize),
-    FormatTable(String, usize),
+    /// Pick table for standardization: (cursor, table_names)
+    PickTable(usize, Vec<String>),
     WordMode(usize),
     Label(String, usize),
 }
@@ -93,6 +91,19 @@ const TARGET_FIELDS: &[(&str, &str)] = &[
 
 const STEP_TYPES: &[&str] = &["extract", "rewrite", "standardize"];
 
+const TABLE_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("direction", "N/S/E/W, NORTH/SOUTH/EAST/WEST"),
+    ("unit_type", "APT/SUITE/UNIT etc."),
+    ("unit_location", "FRONT/REAR/BASEMENT etc."),
+    ("suffix_all", "All suffix variants (AVE/AV/AVEN -> AVENUE)"),
+    ("suffix_common", "Common suffixes only"),
+    ("state", "State abbreviations"),
+    ("street_name_abbr", "Street name abbreviations (MT->MOUNT)"),
+    ("na_values", "NA/N/A values"),
+    ("number_cardinal", "1->ONE, 42->FORTYTWO"),
+    ("number_ordinal", "1->FIRST, 42->FORTYSECOND"),
+];
+
 /// A per-component output format setting.
 #[derive(Debug, Clone)]
 struct OutputSettingState {
@@ -103,22 +114,25 @@ struct OutputSettingState {
     example_long: String,
 }
 
-/// A dictionary entry with its change status.
+/// A dictionary group with its change status.
 #[derive(Debug, Clone)]
-struct DictEntryState {
+struct DictGroupState {
     short: String,
     long: String,
-    status: EntryStatus,
-    /// Original long form (for overrides).
-    original_long: Option<String>,
+    variants: Vec<String>,
+    status: GroupStatus,
+    /// Original values for tracking overrides.
+    original_short: String,
+    original_long: String,
+    original_variants: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum EntryStatus {
+enum GroupStatus {
     Default,
     Added,
     Removed,
-    Overridden,
+    Modified,
 }
 
 /// A step with its original and current enabled state.
@@ -167,7 +181,7 @@ struct App {
     table_names: Vec<String>,
     dict_tab_index: usize,
     /// Dictionary entries per table, with change tracking.
-    dict_entries: Vec<Vec<DictEntryState>>,
+    dict_entries: Vec<Vec<DictGroupState>>,
     dict_list_state: ListState,
     input_mode: InputMode,
 
@@ -240,19 +254,19 @@ impl App {
             .map(|s| s.to_string())
             .collect();
 
-        let dict_entries: Vec<Vec<DictEntryState>> = table_names
+        let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
             .map(|name| {
                 let table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
-                let mut entries: Vec<DictEntryState> = table
+                let mut entries: Vec<DictGroupState> = table
                     .groups
                     .iter()
                     .map(|g| {
-                        let mut status = EntryStatus::Default;
+                        let mut status = GroupStatus::Default;
                         let mut long = g.long.clone();
-                        let mut original_long = None;
+                        let mut variants = g.variants.clone();
 
                         if let Some(ov) = overrides {
                             // Check if removed
@@ -261,24 +275,27 @@ impl App {
                                 g.short == upper || g.long == upper
                             });
                             if is_removed {
-                                status = EntryStatus::Removed;
+                                status = GroupStatus::Removed;
                             }
 
                             // Check if overridden
                             for o in &ov.override_entries {
                                 if o.short.to_uppercase() == g.short {
-                                    original_long = Some(g.long.clone());
                                     long = o.long.to_uppercase();
-                                    status = EntryStatus::Overridden;
+                                    variants = o.variants.clone();
+                                    status = GroupStatus::Modified;
                                 }
                             }
                         }
 
-                        DictEntryState {
+                        DictGroupState {
                             short: g.short.clone(),
                             long,
+                            variants,
                             status,
-                            original_long,
+                            original_short: g.short.clone(),
+                            original_long: g.long.clone(),
+                            original_variants: g.variants.clone(),
                         }
                     })
                     .collect();
@@ -286,12 +303,30 @@ impl App {
                 // Append added entries from config
                 if let Some(ov) = overrides {
                     for add in &ov.add {
-                        entries.push(DictEntryState {
-                            short: add.short.to_uppercase(),
-                            long: add.long.to_uppercase(),
-                            status: EntryStatus::Added,
-                            original_long: None,
-                        });
+                        let short = add.short.to_uppercase();
+                        let long = add.long.to_uppercase();
+                        // Check if this add merges into an existing group
+                        let existing = entries.iter_mut().find(|e| e.short == short);
+                        if let Some(e) = existing {
+                            // Merge variants
+                            for v in &add.variants {
+                                let vu = v.to_uppercase();
+                                if !e.variants.contains(&vu) {
+                                    e.variants.push(vu);
+                                }
+                            }
+                            e.status = GroupStatus::Modified;
+                        } else {
+                            entries.push(DictGroupState {
+                                short: short.clone(),
+                                long: long.clone(),
+                                variants: add.variants.iter().map(|v| v.to_uppercase()).collect(),
+                                status: GroupStatus::Added,
+                                original_short: short,
+                                original_long: long,
+                                original_variants: Vec::new(),
+                            });
+                        }
                     }
                 }
 
@@ -437,24 +472,26 @@ impl App {
 
             for entry in entries {
                 match entry.status {
-                    EntryStatus::Added => {
+                    GroupStatus::Added => {
                         overrides.add.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
-                            ..Default::default()
+                            variants: entry.variants.clone(),
+                            canonical: None,
                         });
                     }
-                    EntryStatus::Removed => {
-                        overrides.remove.push(entry.long.clone());
+                    GroupStatus::Removed => {
+                        overrides.remove.push(entry.short.clone());
                     }
-                    EntryStatus::Overridden => {
-                        overrides.override_entries.push(DictEntry {
+                    GroupStatus::Modified => {
+                        overrides.add.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
-                            ..Default::default()
+                            variants: entry.variants.clone(),
+                            canonical: Some(true),
                         });
                     }
-                    EntryStatus::Default => {}
+                    GroupStatus::Default => {}
                 }
             }
 
@@ -489,11 +526,11 @@ impl App {
         config.save(&self.config_path)
     }
 
-    fn current_dict_entries(&self) -> &[DictEntryState] {
+    fn current_dict_entries(&self) -> &[DictGroupState] {
         &self.dict_entries[self.dict_tab_index]
     }
 
-    fn current_dict_entries_mut(&mut self) -> &mut Vec<DictEntryState> {
+    fn current_dict_entries_mut(&mut self) -> &mut Vec<DictGroupState> {
         &mut self.dict_entries[self.dict_tab_index]
     }
 }
@@ -867,15 +904,15 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &mut app.current_dict_entries_mut()[i];
                 match entry.status {
-                    EntryStatus::Default => {
-                        entry.status = EntryStatus::Removed;
+                    GroupStatus::Default => {
+                        entry.status = GroupStatus::Removed;
                         app.dirty = true;
                     }
-                    EntryStatus::Removed => {
-                        entry.status = EntryStatus::Default;
+                    GroupStatus::Removed => {
+                        entry.status = GroupStatus::Default;
                         app.dirty = true;
                     }
-                    EntryStatus::Added => {
+                    GroupStatus::Added => {
                         // Remove the added entry entirely
                         app.current_dict_entries_mut().remove(i);
                         let len = app.current_dict_entries().len();
@@ -886,13 +923,12 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
                         }
                         app.dirty = true;
                     }
-                    EntryStatus::Overridden => {
-                        // Revert override to default
-                        if let Some(ref orig) = entry.original_long.clone() {
-                            entry.long = orig.clone();
-                        }
-                        entry.original_long = None;
-                        entry.status = EntryStatus::Default;
+                    GroupStatus::Modified => {
+                        // Revert to original values
+                        entry.short = entry.original_short.clone();
+                        entry.long = entry.original_long.clone();
+                        entry.variants = entry.original_variants.clone();
+                        entry.status = GroupStatus::Default;
                         app.dirty = true;
                     }
                 }
@@ -906,7 +942,7 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
         KeyCode::Enter => {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &app.current_dict_entries()[i];
-                if entry.status != EntryStatus::Removed {
+                if entry.status != GroupStatus::Removed {
                     app.input_mode = InputMode::EditLong(i, entry.long.clone());
                 }
             }
@@ -929,11 +965,14 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                             .unwrap_or(false)
                     };
                     if is_vl {
-                        let new_entry = DictEntryState {
-                            short: s,
+                        let new_entry = DictGroupState {
+                            short: s.clone(),
                             long: String::new(),
-                            status: EntryStatus::Added,
-                            original_long: None,
+                            variants: Vec::new(),
+                            status: GroupStatus::Added,
+                            original_short: s,
+                            original_long: String::new(),
+                            original_variants: Vec::new(),
                         };
                         app.current_dict_entries_mut().push(new_entry);
                         let len = app.current_dict_entries().len();
@@ -959,11 +998,16 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
         InputMode::AddLong(short, long) => match code {
             KeyCode::Enter => {
                 if !long.is_empty() {
-                    let new_entry = DictEntryState {
-                        short: short.to_uppercase(),
-                        long: long.to_uppercase(),
-                        status: EntryStatus::Added,
-                        original_long: None,
+                    let s = short.to_uppercase();
+                    let l = long.to_uppercase();
+                    let new_entry = DictGroupState {
+                        short: s.clone(),
+                        long: l.clone(),
+                        variants: Vec::new(),
+                        status: GroupStatus::Added,
+                        original_short: s,
+                        original_long: l,
+                        original_variants: Vec::new(),
                     };
                     app.current_dict_entries_mut().push(new_entry);
                     let len = app.current_dict_entries().len();
@@ -988,9 +1032,8 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                 let idx = *idx;
                 let new_long = text.to_uppercase();
                 let entry = &mut app.current_dict_entries_mut()[idx];
-                if entry.status == EntryStatus::Default {
-                    entry.original_long = Some(entry.long.clone());
-                    entry.status = EntryStatus::Overridden;
+                if entry.status == GroupStatus::Default {
+                    entry.status = GroupStatus::Modified;
                 }
                 entry.long = new_long;
                 app.dirty = true;
@@ -1400,7 +1443,8 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                 let next = if selected == 0 {
                     WizardState::Pattern(String::new(), 0, None)
                 } else {
-                    WizardState::MatchingTable(String::new(), 0)
+                    let names: Vec<String> = TABLE_DESCRIPTIONS.iter().map(|(n, _)| n.to_string()).collect();
+                    WizardState::PickTable(0, names)
                 };
                 app.input_mode = InputMode::AddStep(next, insert_idx);
             }
@@ -1408,27 +1452,26 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
             _ => {}
         },
 
-        WizardState::MatchingTable(text, cursor) => {
-            if let Some(name) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, _| WizardState::MatchingTable(t, c),
-                false,
-            ) {
-                app.wizard_acc.matching_table = Some(name);
-                app.input_mode = InputMode::AddStep(WizardState::FormatTable(String::new(), 0), insert_idx);
+        WizardState::PickTable(selected, names) => match code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.input_mode = InputMode::AddStep(
+                    WizardState::PickTable((selected + 1) % names.len(), names),
+                    insert_idx,
+                );
             }
-        }
-
-        WizardState::FormatTable(text, cursor) => {
-            if let Some(name) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, _| WizardState::FormatTable(t, c),
-                false,
-            ) {
-                app.wizard_acc.format_table = Some(name);
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.input_mode = InputMode::AddStep(
+                    WizardState::PickTable(if selected == 0 { names.len() - 1 } else { selected - 1 }, names),
+                    insert_idx,
+                );
+            }
+            KeyCode::Enter => {
+                app.wizard_acc.table = Some(names[selected].clone());
                 app.input_mode = InputMode::AddStep(WizardState::WordMode(0), insert_idx);
             }
-        }
+            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
+            _ => {}
+        },
 
         WizardState::WordMode(selected) => match code {
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1467,8 +1510,8 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                     replacement: acc.replacement.clone(),
                     skip_if_filled: acc.skip_if_filled,
                     source: None,
-                    matching_table: acc.matching_table.clone(),
-                    format_table: acc.format_table.clone(),
+                    matching_table: None,
+                    format_table: None,
                     mode: acc.mode.clone(),
                     targets: acc.targets.clone(),
                 };
@@ -1958,11 +2001,31 @@ fn render_wizard(frame: &mut Frame, wizard: &WizardState, acc: &WizardAccumulato
                 .block(Block::bordered().title("Add standardize — approach"));
             frame.render_widget(list, popup_area);
         }
-        WizardState::MatchingTable(text, cursor) => {
-            render_wizard_text_input(frame, popup_area, "Add standardize — matching table", text, *cursor, None);
-        }
-        WizardState::FormatTable(text, cursor) => {
-            render_wizard_text_input(frame, popup_area, "Add standardize — format table", text, *cursor, None);
+        WizardState::PickTable(selected, names) => {
+            let items: Vec<ListItem> = names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    let desc = TABLE_DESCRIPTIONS
+                        .iter()
+                        .find(|(n, _)| *n == name.as_str())
+                        .map(|(_, d)| *d)
+                        .unwrap_or("");
+                    let style = if i == *selected {
+                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new()
+                    };
+                    let prefix = if i == *selected { "> " } else { "  " };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{}{:20}", prefix, name), style),
+                        Span::styled(format!("  {}", desc), Style::new().fg(Color::DarkGray)),
+                    ]))
+                })
+                .collect();
+            let list = List::new(items)
+                .block(Block::bordered().title("Pick table for standardization (Enter to select)"));
+            frame.render_widget(list, popup_area);
         }
         WizardState::WordMode(selected) => {
             let options = ["Whole field", "Per word"];
@@ -2112,29 +2175,27 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             .iter()
             .map(|e| {
                 let (marker, style) = match e.status {
-                    EntryStatus::Default => ("  ", Style::new()),
-                    EntryStatus::Added => ("+ ", Style::new().fg(Color::Green)),
-                    EntryStatus::Removed => ("- ", Style::new().fg(Color::Red)),
-                    EntryStatus::Overridden => ("~ ", Style::new().fg(Color::Yellow)),
+                    GroupStatus::Default => ("\u{2605} ", Style::new()),
+                    GroupStatus::Added => ("\u{2605} ", Style::new().fg(Color::Green)),
+                    GroupStatus::Removed => ("\u{2605} ", Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT)),
+                    GroupStatus::Modified => ("\u{2605} ", Style::new().fg(Color::Yellow)),
                 };
-                let detail = if let Some(ref orig) = e.original_long {
-                    format!(" (was {})", orig)
-                } else {
+                let variants_str = if e.variants.is_empty() {
                     String::new()
+                } else {
+                    format!("    {}", e.variants.join(", "))
                 };
                 if is_value_list {
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, style),
                         Span::styled(e.short.clone(), style),
-                        Span::styled(detail, Style::new().fg(Color::DarkGray)),
                     ]))
                 } else {
                     ListItem::new(Line::from(vec![
                         Span::styled(marker, style),
-                        Span::styled(format!("{:20}", e.short), style),
-                        Span::styled(" -> ", Style::new().fg(Color::DarkGray)),
-                        Span::styled(e.long.clone(), style),
-                        Span::styled(detail, Style::new().fg(Color::DarkGray)),
+                        Span::styled(format!("{:12}", e.short), style),
+                        Span::styled(format!("{:20}", e.long), style),
+                        Span::styled(variants_str, Style::new().fg(Color::DarkGray)),
                     ]))
                 }
             })
@@ -2300,17 +2361,21 @@ mod tests {
     fn test_to_config_dict_add() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
         if !app.table_names.is_empty() {
-            app.dict_entries[0].push(DictEntryState {
+            app.dict_entries[0].push(DictGroupState {
                 short: "TEST".to_string(),
                 long: "TESTING".to_string(),
-                status: EntryStatus::Added,
-                original_long: None,
+                variants: vec!["TST".to_string()],
+                status: GroupStatus::Added,
+                original_short: "TEST".to_string(),
+                original_long: "TESTING".to_string(),
+                original_variants: Vec::new(),
             });
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
             assert_eq!(overrides.add.len(), 1);
             assert_eq!(overrides.add[0].short, "TEST");
+            assert_eq!(overrides.add[0].variants, vec!["TST".to_string()]);
         }
     }
 
@@ -2318,11 +2383,13 @@ mod tests {
     fn test_to_config_dict_remove() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
         if !app.dict_entries[0].is_empty() {
-            app.dict_entries[0][0].status = EntryStatus::Removed;
+            app.dict_entries[0][0].status = GroupStatus::Removed;
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
             assert_eq!(overrides.remove.len(), 1);
+            // Remove now stores the short form (canonical key)
+            assert_eq!(overrides.remove[0], app.dict_entries[0][0].short);
         }
     }
 
@@ -2386,21 +2453,22 @@ mod tests {
         let last = entries.last().unwrap();
         assert_eq!(last.short, "TST");
         assert_eq!(last.long, "TESTING");
-        assert_eq!(last.status, EntryStatus::Added);
+        assert_eq!(last.status, GroupStatus::Added);
     }
 
     #[test]
     fn test_to_config_dict_override() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
         if !app.dict_entries[0].is_empty() {
-            app.dict_entries[0][0].original_long = Some(app.dict_entries[0][0].long.clone());
             app.dict_entries[0][0].long = "CHANGED".to_string();
-            app.dict_entries[0][0].status = EntryStatus::Overridden;
+            app.dict_entries[0][0].status = GroupStatus::Modified;
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
-            assert_eq!(overrides.override_entries.len(), 1);
-            assert_eq!(overrides.override_entries[0].long, "CHANGED");
+            // Modified entries go to add with canonical: Some(true)
+            assert_eq!(overrides.add.len(), 1);
+            assert_eq!(overrides.add[0].long, "CHANGED");
+            assert_eq!(overrides.add[0].canonical, Some(true));
         }
     }
 }
