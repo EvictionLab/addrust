@@ -287,7 +287,7 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let p = Pipeline::default();
         let summaries = p.step_summaries();
         assert!(!summaries.is_empty());
-        assert_eq!(summaries[0].step_type, "validate");
+        assert_eq!(summaries[0].step_type, "rewrite");
         assert_eq!(summaries[0].label, "na_check");
     }
 

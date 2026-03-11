@@ -76,14 +76,6 @@ pub enum StandardizeMode {
 
 #[derive(Debug)]
 pub enum Step {
-    Validate {
-        label: String,
-        pattern: Regex,
-        pattern_template: String,
-        warning: String,
-        clear: bool,
-        enabled: bool,
-    },
     Rewrite {
         label: String,
         pattern: Regex,
@@ -115,7 +107,6 @@ pub enum Step {
 impl Step {
     pub fn label(&self) -> &str {
         match self {
-            Step::Validate { label, .. } => label,
             Step::Rewrite { label, .. } => label,
             Step::Extract { label, .. } => label,
             Step::Standardize { label, .. } => label,
@@ -124,7 +115,6 @@ impl Step {
 
     pub fn enabled(&self) -> bool {
         match self {
-            Step::Validate { enabled, .. } => *enabled,
             Step::Rewrite { enabled, .. } => *enabled,
             Step::Extract { enabled, .. } => *enabled,
             Step::Standardize { enabled, .. } => *enabled,
@@ -133,7 +123,6 @@ impl Step {
 
     pub fn set_enabled(&mut self, value: bool) {
         match self {
-            Step::Validate { enabled, .. } => *enabled = value,
             Step::Rewrite { enabled, .. } => *enabled = value,
             Step::Extract { enabled, .. } => *enabled = value,
             Step::Standardize { enabled, .. } => *enabled = value,
@@ -142,9 +131,6 @@ impl Step {
 
     pub fn pattern_template(&self) -> Option<&str> {
         match self {
-            Step::Validate {
-                pattern_template, ..
-            } => Some(pattern_template),
             Step::Rewrite {
                 pattern_template, ..
             } => Some(pattern_template),
@@ -157,7 +143,6 @@ impl Step {
 
     pub fn step_type(&self) -> &'static str {
         match self {
-            Step::Validate { .. } => "validate",
             Step::Rewrite { .. } => "rewrite",
             Step::Extract { .. } => "extract",
             Step::Standardize { .. } => "standardize",
@@ -192,14 +177,6 @@ pub fn apply_step(
     }
 
     match step {
-        Step::Validate { pattern, warning, clear, .. } => {
-            if pattern.is_match(&state.working).unwrap_or(false) {
-                state.fields.warnings.push(warning.clone());
-                if *clear {
-                    state.working.clear();
-                }
-            }
-        }
         Step::Rewrite { pattern, replacement, rewrite_table, .. } => {
             if !pattern.is_match(&state.working).unwrap_or(false) {
                 return;
@@ -289,8 +266,6 @@ pub struct StepDef {
     pub table: Option<String>,
     pub target: Option<String>,
     pub replacement: Option<String>,
-    pub warning: Option<String>,
-    pub clear: Option<bool>,
     pub skip_if_filled: Option<bool>,
     pub matching_table: Option<String>,
     pub format_table: Option<String>,
@@ -322,23 +297,6 @@ fn parse_field(name: &str) -> Field {
 /// Compile a single StepDef into a Step, expanding table references in patterns.
 pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String> {
     match def.step_type.as_str() {
-        "validate" => {
-            let template = def
-                .pattern
-                .as_ref()
-                .ok_or_else(|| format!("validate step '{}' missing pattern", def.label))?;
-            let expanded = expand_template(template, abbr);
-            let pattern = Regex::new(&expanded)
-                .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-            Ok(Step::Validate {
-                label: def.label.clone(),
-                pattern,
-                pattern_template: template.clone(),
-                warning: def.warning.clone().unwrap_or_else(|| def.label.clone()),
-                clear: def.clear.unwrap_or(false),
-                enabled: true,
-            })
-        }
         "rewrite" => {
             let template = def
                 .pattern
@@ -478,7 +436,7 @@ mod tests {
         let toml_str = include_str!("../data/defaults/steps.toml");
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
         assert!(defs.step.len() > 20, "Expected 20+ steps, got {}", defs.step.len());
-        assert_eq!(defs.step[0].step_type, "validate");
+        assert_eq!(defs.step[0].step_type, "rewrite");
         assert_eq!(defs.step[0].label, "na_check");
         let last = defs.step.last().unwrap();
         assert_eq!(last.step_type, "standardize");
@@ -492,31 +450,8 @@ mod tests {
         let abbr = build_default_tables();
         let steps = compile_steps(&defs.step, &abbr);
         assert!(steps.len() > 20);
-        assert_eq!(steps[0].step_type(), "validate");
+        assert_eq!(steps[0].step_type(), "rewrite");
         assert_eq!(steps[0].label(), "na_check");
-    }
-
-    #[test]
-    fn test_apply_validate_step() {
-        use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
-        use crate::config::OutputConfig;
-        let abbr = build_default_tables();
-        let toml_str = r#"
-[[step]]
-type = "validate"
-label = "na_check"
-pattern = '(?i)^(N/?A)$'
-warning = "na_address"
-clear = true
-"#;
-        let defs: StepsDef = toml::from_str(toml_str).unwrap();
-        let steps = compile_steps(&defs.step, &abbr);
-        let mut state = AddressState::new_from_prepared("N/A".to_string());
-        let output = OutputConfig::default();
-        apply_step(&mut state, &steps[0], &abbr, &output);
-        assert!(state.fields.warnings.contains(&"na_address".to_string()));
-        assert!(state.working.is_empty());
     }
 
     #[test]
@@ -530,7 +465,7 @@ clear = true
             label: "test_rewrite".to_string(),
             pattern: Some(r"STAPT".to_string()),
             replacement: Some("ST APT".to_string()),
-            table: None, target: None, warning: None, clear: None,
+            table: None, target: None,
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
@@ -573,7 +508,6 @@ table = "street_name_abbr"
             pattern: Some(r"^\d+\b".to_string()),
             replacement: None,
             table: None, target: Some("street_number".to_string()),
-            warning: None, clear: None,
             skip_if_filled: Some(true),
             matching_table: None, format_table: None, mode: None,
         };
@@ -596,7 +530,7 @@ table = "street_name_abbr"
             label: "std_suffix".to_string(),
             pattern: None, replacement: None, table: None,
             target: Some("suffix".to_string()),
-            warning: None, clear: None, skip_if_filled: None,
+            skip_if_filled: None,
             matching_table: Some("suffix_all".to_string()),
             format_table: Some("suffix_usps".to_string()),
             mode: None,

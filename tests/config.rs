@@ -46,7 +46,9 @@ add = [{ short = "VACANT", long = "" }]
     .unwrap();
     let p = Pipeline::from_config(&config);
     let addr = p.parse("VACANT");
-    assert!(addr.warnings.contains(&"na_address".to_string()));
+    // NA rewrite empties the working string; no fields extracted
+    assert!(addr.street_name.is_none());
+    assert!(addr.street_number.is_none());
 }
 
 #[test]
@@ -60,8 +62,8 @@ remove = ["NULL"]
     .unwrap();
     let p = Pipeline::from_config(&config);
     let addr = p.parse("NULL");
-    // NULL should no longer trigger NA warning
-    assert!(!addr.warnings.contains(&"na_address".to_string()));
+    // NULL is no longer an NA value, so it should be parsed (becomes street_name)
+    assert!(addr.street_name.is_some());
 }
 
 #[test]
@@ -111,12 +113,14 @@ add = [{ short = "PT", long = "POINT" }]
 fn test_full_pipeline_with_tables_cleanup() {
     let p = Pipeline::default();
 
-    // NA values from table
+    // NA values from table — rewrite empties working string, no fields extracted
     let addr = p.parse("NULL");
-    assert!(addr.warnings.contains(&"na_address".to_string()));
+    assert!(addr.street_name.is_none());
+    assert!(addr.street_number.is_none());
 
     let addr = p.parse("UNKNOWN");
-    assert!(addr.warnings.contains(&"na_address".to_string()));
+    assert!(addr.street_name.is_none());
+    assert!(addr.street_number.is_none());
 
     // Street name abbreviations from table
     let addr = p.parse("123 MT PLEASANT AVE");

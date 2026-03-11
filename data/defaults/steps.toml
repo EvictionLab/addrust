@@ -1,13 +1,12 @@
 # addrust default pipeline steps
 # Order matters — steps execute top to bottom.
 
-# --- Validation ---
+# --- NA removal ---
 [[step]]
-type = "validate"
+type = "rewrite"
 label = "na_check"
 pattern = '(?i)^(N/?A|{na_values})$'
-warning = "na_address"
-clear = true
+replacement = ''
 
 # --- City / State / Zip ---
 [[step]]
