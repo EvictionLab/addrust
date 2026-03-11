@@ -32,6 +32,10 @@ enum InputMode {
     AddLong(String, String),
     /// Editing an existing entry's long form: (index, current_text).
     EditLong(usize, String),
+    /// Viewing/editing a group's variants: (group_index, variant_cursor).
+    EditVariants(usize, usize),
+    /// Adding a new variant to a group: (group_index, text).
+    AddVariant(usize, String),
     /// Editing a step's pattern template: (text, cursor position, optional validation error).
     EditPattern(String, usize, Option<String>),
     /// Add-step wizard: (wizard state, insertion index).
@@ -938,8 +942,17 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('a') => {
             app.input_mode = InputMode::AddShort(String::new());
         }
-        // Edit long form
+        // Drill into group to view/edit variants
         KeyCode::Enter => {
+            if let Some(i) = app.dict_list_state.selected() {
+                let entry = &app.current_dict_entries()[i];
+                if entry.status != GroupStatus::Removed {
+                    app.input_mode = InputMode::EditVariants(i, 0);
+                }
+            }
+        }
+        // Edit long form directly
+        KeyCode::Char('e') => {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
@@ -1050,6 +1063,84 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
             }
             _ => {}
         },
+        InputMode::EditVariants(group_idx, cursor) => {
+            let group_idx = *group_idx;
+            let cursor = *cursor;
+            match code {
+                KeyCode::Esc => {
+                    app.input_mode = InputMode::Normal;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let len = app.current_dict_entries()[group_idx].variants.len();
+                    if len > 0 {
+                        app.input_mode = InputMode::EditVariants(group_idx, (cursor + 1) % len);
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let len = app.current_dict_entries()[group_idx].variants.len();
+                    if len > 0 {
+                        app.input_mode = InputMode::EditVariants(
+                            group_idx,
+                            if cursor == 0 { len - 1 } else { cursor - 1 },
+                        );
+                    }
+                }
+                KeyCode::Char('a') => {
+                    app.input_mode = InputMode::AddVariant(group_idx, String::new());
+                }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    let entry = &mut app.current_dict_entries_mut()[group_idx];
+                    if !entry.variants.is_empty() {
+                        entry.variants.remove(cursor);
+                        if entry.status == GroupStatus::Default {
+                            entry.status = GroupStatus::Modified;
+                        }
+                        app.dirty = true;
+                        let new_len = app.current_dict_entries()[group_idx].variants.len();
+                        let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
+                        app.input_mode = InputMode::EditVariants(group_idx, new_cursor);
+                    }
+                }
+                _ => {}
+            }
+        }
+        InputMode::AddVariant(group_idx, text) => {
+            let group_idx = *group_idx;
+            match code {
+                KeyCode::Enter => {
+                    if !text.is_empty() {
+                        let v = text.to_uppercase();
+                        let entry = &mut app.current_dict_entries_mut()[group_idx];
+                        if !entry.variants.contains(&v) {
+                            entry.variants.push(v);
+                            if entry.status == GroupStatus::Default {
+                                entry.status = GroupStatus::Modified;
+                            }
+                            app.dirty = true;
+                        }
+                    }
+                    let len = app.current_dict_entries()[group_idx].variants.len();
+                    app.input_mode = InputMode::EditVariants(
+                        group_idx,
+                        if len > 0 { len - 1 } else { 0 },
+                    );
+                }
+                KeyCode::Esc => {
+                    let len = app.current_dict_entries()[group_idx].variants.len();
+                    app.input_mode = InputMode::EditVariants(
+                        group_idx,
+                        if len > 0 { len - 1 } else { 0 },
+                    );
+                }
+                KeyCode::Char(c) => {
+                    text.push(c);
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                _ => {}
+            }
+        }
         InputMode::EditPattern(text, cursor, error) => match code {
             KeyCode::Enter => {
                 // Validate: expand table placeholders and try to compile
@@ -1625,6 +1716,47 @@ fn render(frame: &mut Frame, app: &mut App) {
             let display = format!("{}_", text);
             let popup = Paragraph::new(display)
                 .block(Block::bordered().title("Edit long form (Enter to confirm, Esc to cancel)"))
+                .style(Style::new().bg(Color::Black).fg(Color::Cyan));
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(popup, popup_area);
+        }
+        InputMode::EditVariants(group_idx, cursor) => {
+            let entry = &app.current_dict_entries()[*group_idx];
+            let height = (entry.variants.len() as u16 + 4).max(6).min(20);
+            let popup_area = centered_rect(50, height, frame.area());
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled(&entry.short, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::raw(" → "),
+                    Span::styled(&entry.long, Style::new().fg(Color::Cyan)),
+                ]),
+                Line::raw(""),
+            ];
+            if entry.variants.is_empty() {
+                lines.push(Line::styled("  (no variants)", Style::new().fg(Color::DarkGray)));
+            } else {
+                for (i, v) in entry.variants.iter().enumerate() {
+                    let marker = if i == *cursor { "> " } else { "  " };
+                    let style = if i == *cursor {
+                        Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new()
+                    };
+                    lines.push(Line::styled(format!("{}{}", marker, v), style));
+                }
+            }
+            let popup = Paragraph::new(lines)
+                .block(Block::bordered().title("Variants (a: add, d: delete, Esc: back)"))
+                .style(Style::new().bg(Color::Black));
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            frame.render_widget(popup, popup_area);
+        }
+        InputMode::AddVariant(group_idx, text) => {
+            let entry = &app.current_dict_entries()[*group_idx];
+            let popup_area = centered_rect(50, 5, frame.area());
+            let display = format!("{} → {} : {}_", entry.short, entry.long, text);
+            let popup = Paragraph::new(display)
+                .block(Block::bordered().title("Add variant (Enter to confirm, Esc to cancel)"))
                 .style(Style::new().bg(Color::Black).fg(Color::Cyan));
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
