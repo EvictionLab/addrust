@@ -671,4 +671,52 @@ table = "street_name_abbr"
         let result = parse_field("nonexistent_field");
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_rewrite_with_source_field() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let def = StepDef {
+            step_type: "rewrite".to_string(),
+            label: "strip_hash".to_string(),
+            pattern: Some(r"^#\s*".to_string()),
+            replacement: Some("".to_string()),
+            table: None, target: None, source: Some("unit".to_string()),
+            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+        };
+        let step = compile_step(&def, &abbr).unwrap();
+        let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
+        state.fields.unit = Some("#4B".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &step, &abbr, &output);
+        assert_eq!(state.fields.unit.as_deref(), Some("4B"));
+        assert_eq!(state.working, "123 MAIN ST");
+    }
+
+    #[test]
+    fn test_extract_with_source_field_move() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let def = StepDef {
+            step_type: "extract".to_string(),
+            label: "promote_unit".to_string(),
+            pattern: Some(r"^.+$".to_string()),
+            replacement: None,
+            table: None, target: Some("street_number".to_string()),
+            source: Some("unit".to_string()),
+            skip_if_filled: Some(true),
+            matching_table: None, format_table: None, mode: None,
+        };
+        let step = compile_step(&def, &abbr).unwrap();
+        let mut state = AddressState::new_from_prepared("MAIN ST".to_string());
+        state.fields.unit = Some("42".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &step, &abbr, &output);
+        assert_eq!(state.fields.street_number.as_deref(), Some("42"));
+        assert!(state.fields.unit.is_none());
+    }
 }
