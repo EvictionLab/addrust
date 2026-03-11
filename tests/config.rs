@@ -1,4 +1,4 @@
-use addrust::config::Config;
+use addrust::config::{Config, StepOverride};
 use addrust::pipeline::Pipeline;
 
 #[test]
@@ -451,5 +451,27 @@ fn test_source_rewrite_no_side_effects() {
     assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
     assert_eq!(addr.unit.as_deref(), Some("7"));
     assert!(addr.unit_type.is_none());
+}
+
+#[test]
+fn test_step_overrides_deserialize() {
+    let config: Config = toml::from_str(
+        r#"
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+skip_if_filled = false
+
+[steps.step_overrides.unit_type_value]
+target = "unit"
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.steps.step_overrides.len(), 2);
+    let po_box = &config.steps.step_overrides["po_box"];
+    assert_eq!(po_box.pattern.as_deref(), Some(r"\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b"));
+    assert_eq!(po_box.skip_if_filled, Some(false));
+    let utv = &config.steps.step_overrides["unit_type_value"];
+    assert_eq!(utv.target.as_deref(), Some("unit"));
+    assert!(utv.pattern.is_none());
 }
 

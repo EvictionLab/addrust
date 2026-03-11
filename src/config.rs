@@ -60,11 +60,48 @@ fn is_short(f: &OutputFormat) -> bool { *f == OutputFormat::Short }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
+pub struct StepOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_if_filled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub targets: Option<HashMap<String, usize>>,
+}
+
+impl StepOverride {
+    /// Apply this override to a StepDef, replacing only the fields that are Some.
+    pub fn apply_to(&self, def: &mut crate::step::StepDef) {
+        if let Some(ref p) = self.pattern { def.pattern = Some(p.clone()); }
+        if let Some(ref t) = self.table { def.table = Some(t.clone()); }
+        if let Some(ref t) = self.target { def.target = Some(t.clone()); }
+        if let Some(ref r) = self.replacement { def.replacement = Some(r.clone()); }
+        if let Some(s) = self.skip_if_filled { def.skip_if_filled = Some(s); }
+        if let Some(ref m) = self.mode { def.mode = Some(m.clone()); }
+        if let Some(ref s) = self.source { def.source = Some(s.clone()); }
+        if let Some(ref t) = self.targets { def.targets = Some(t.clone()); }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct StepsConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub pattern_overrides: HashMap<String, String>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub step_overrides: HashMap<String, StepOverride>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub step_order: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -75,6 +112,7 @@ impl StepsConfig {
     pub fn is_empty(&self) -> bool {
         self.disabled.is_empty()
             && self.pattern_overrides.is_empty()
+            && self.step_overrides.is_empty()
             && self.step_order.is_empty()
             && self.custom_steps.is_empty()
     }
