@@ -2,23 +2,132 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// A single abbreviation entry: short form ↔ long form.
+/// Kept temporarily for backward compatibility with build functions (Task 2 will remove).
 #[derive(Debug, Clone)]
 pub struct Abbr {
     pub short: String,
     pub long: String,
 }
 
-/// A typed collection of abbreviations with fast lookup.
+/// A group of abbreviation variants with one canonical short/long pair.
+#[derive(Debug, Clone)]
+pub struct AbbrGroup {
+    pub short: String,
+    pub long: String,
+    pub variants: Vec<String>,
+}
+
+/// A typed collection of abbreviation groups with fast lookup.
 #[derive(Debug, Clone)]
 pub struct AbbrTable {
+    pub groups: Vec<AbbrGroup>,
+    // --- Legacy fields kept for backward compat (Task 2 removes) ---
     pub entries: Vec<Abbr>,
     short_to_long: HashMap<String, String>,
     long_to_short: HashMap<String, String>,
     /// Optional extraction pattern template for this table.
     pub pattern_template: Option<String>,
+    /// Maps every literal value (canonical short, long, non-regex variants) → group index.
+    lookup: HashMap<String, usize>,
+    /// Compiled regexes for groups with regex variants: (regex, group_index).
+    regex_variants: Vec<(fancy_regex::Regex, usize)>,
 }
 
 impl AbbrTable {
+    /// Construct from the new AbbrGroup model.
+    pub fn from_groups(groups: Vec<AbbrGroup>) -> Self {
+        let mut lookup = HashMap::new();
+        let mut regex_variants = Vec::new();
+
+        // Collect all (value, group_index) pairs, sort longest-first so longer
+        // keys take priority in the hashmap (inserted last = wins on collision).
+        let mut literal_pairs: Vec<(String, usize)> = Vec::new();
+        for (idx, group) in groups.iter().enumerate() {
+            literal_pairs.push((group.short.to_uppercase(), idx));
+            literal_pairs.push((group.long.to_uppercase(), idx));
+            for v in &group.variants {
+                if has_regex_chars(v) {
+                    // Compile as full-match regex
+                    if let Ok(re) = fancy_regex::Regex::new(&format!("^(?:{})$", v)) {
+                        regex_variants.push((re, idx));
+                    }
+                } else {
+                    literal_pairs.push((v.to_uppercase(), idx));
+                }
+            }
+        }
+
+        // Sort shortest-first so longest keys are inserted last and win
+        literal_pairs.sort_by(|a, b| a.0.len().cmp(&b.0.len()));
+        for (value, idx) in literal_pairs {
+            if !value.is_empty() {
+                lookup.insert(value, idx);
+            }
+        }
+
+        Self {
+            groups,
+            // Legacy fields — empty for from_groups-constructed tables
+            entries: Vec::new(),
+            short_to_long: HashMap::new(),
+            long_to_short: HashMap::new(),
+            pattern_template: None,
+            lookup,
+            regex_variants,
+        }
+    }
+
+    /// Look up a value in the table. Returns (group_index, canonical_short, canonical_long).
+    pub fn standardize(&self, value: &str) -> Option<(usize, &str, &str)> {
+        let upper = value.to_uppercase();
+        // Tier 1: hashmap lookup
+        if let Some(&idx) = self.lookup.get(&upper) {
+            let g = &self.groups[idx];
+            return Some((idx, &g.short, &g.long));
+        }
+        // Tier 2: regex fallback
+        for (re, idx) in &self.regex_variants {
+            if re.is_match(&upper).unwrap_or(false) {
+                let g = &self.groups[*idx];
+                return Some((*idx, &g.short, &g.long));
+            }
+        }
+        None
+    }
+
+    /// All matchable values (canonical shorts + longs + variants), deduped, sorted longest-first.
+    /// Regex variants included as-is (not escaped). Literals are plain strings.
+    pub fn all_match_values(&self) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
+        let mut values = Vec::new();
+        for group in &self.groups {
+            if seen.insert(group.short.as_str()) {
+                values.push(group.short.as_str());
+            }
+            if seen.insert(group.long.as_str()) {
+                values.push(group.long.as_str());
+            }
+            for v in &group.variants {
+                if seen.insert(v.as_str()) {
+                    values.push(v.as_str());
+                }
+            }
+        }
+        values.sort_by(|a, b| b.len().cmp(&a.len()));
+        values
+    }
+
+    /// True when all long forms are empty — a value-list table (not a short↔long mapping).
+    pub fn is_value_list(&self) -> bool {
+        // Support both new (groups) and legacy (entries) paths
+        if !self.groups.is_empty() {
+            return self.groups.iter().all(|g| g.long.is_empty());
+        }
+        !self.entries.is_empty() && self.entries.iter().all(|e| e.long.is_empty())
+    }
+
+    // === Legacy constructors and methods (kept for backward compat, Task 2 removes) ===
+
     pub fn new(mut entries: Vec<Abbr>) -> Self {
         // Deduplicate entries by (short, long) pair
         let mut seen = std::collections::HashSet::new();
@@ -27,7 +136,6 @@ impl AbbrTable {
         let mut s2l = HashMap::new();
         let mut l2s = HashMap::new();
         for e in &entries {
-            // For regex-containing shorts, skip the hashmap (they need regex matching)
             if !has_regex_chars(&e.short) {
                 s2l.entry(e.short.clone()).or_insert(e.long.clone());
             }
@@ -36,10 +144,13 @@ impl AbbrTable {
             }
         }
         Self {
+            groups: Vec::new(),
             entries,
             short_to_long: s2l,
             long_to_short: l2s,
             pattern_template: None,
+            lookup: HashMap::new(),
+            regex_variants: Vec::new(),
         }
     }
 
@@ -66,11 +177,6 @@ impl AbbrTable {
         self.long_to_short.get(long).map(|s| s.as_str())
     }
 
-    /// True when all long forms are empty — a value-list table (not a short↔long mapping).
-    pub fn is_value_list(&self) -> bool {
-        !self.entries.is_empty() && self.entries.iter().all(|e| e.long.is_empty())
-    }
-
     /// Only the short column values, sorted by length descending.
     pub fn short_values(&self) -> Vec<&str> {
         let mut vals: Vec<&str> = self
@@ -95,7 +201,6 @@ impl AbbrTable {
             .collect();
         vals.sort_unstable();
         vals.dedup();
-        // Sort by length descending so longer patterns match first
         vals.sort_by(|a, b| b.len().cmp(&a.len()));
         vals
     }
@@ -104,13 +209,11 @@ impl AbbrTable {
     pub fn patch(&self, overrides: &crate::config::DictOverrides) -> Self {
         let mut entries = self.entries.clone();
 
-        // Remove: filter out entries matching short or long form
         for remove_val in &overrides.remove {
             let upper = remove_val.to_uppercase();
             entries.retain(|e| e.short != upper && e.long != upper);
         }
 
-        // Override: replace long form for matching short
         for ov in &overrides.override_entries {
             let short_upper = ov.short.to_uppercase();
             let long_upper = ov.long.to_uppercase();
@@ -121,7 +224,6 @@ impl AbbrTable {
             }
         }
 
-        // Add: append new entries
         for add in &overrides.add {
             entries.push(Abbr {
                 short: add.short.to_uppercase(),
@@ -140,7 +242,6 @@ impl AbbrTable {
 
     /// Get (short, long) pairs for abbreviation switching.
     pub fn short_to_long_pairs(&self) -> Vec<(String, String)> {
-        // Sort by short length descending (longer matches first)
         let mut pairs: Vec<_> = self
             .entries
             .iter()
@@ -597,5 +698,84 @@ mod tests {
         assert_eq!(usps.to_short("DRIVE"), Some("DR"));
         assert_eq!(usps.to_long("ST"), Some("STREET"));
         assert_eq!(usps.to_short("STREET"), Some("ST"));
+    }
+
+    #[test]
+    fn test_abbr_group_standardize_literal() {
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup {
+                short: "AVE".into(),
+                long: "AVENUE".into(),
+                variants: vec!["AV".into(), "AVEN".into()],
+            },
+            AbbrGroup {
+                short: "DR".into(),
+                long: "DRIVE".into(),
+                variants: vec!["DRIV".into()],
+            },
+        ]);
+        // Canonical short
+        assert_eq!(table.standardize("AVE"), Some((0, "AVE", "AVENUE")));
+        // Canonical long
+        assert_eq!(table.standardize("AVENUE"), Some((0, "AVE", "AVENUE")));
+        // Variant
+        assert_eq!(table.standardize("AV"), Some((0, "AVE", "AVENUE")));
+        assert_eq!(table.standardize("AVEN"), Some((0, "AVE", "AVENUE")));
+        // Different group
+        assert_eq!(table.standardize("DRIV"), Some((1, "DR", "DRIVE")));
+        // No match
+        assert_eq!(table.standardize("BLVD"), None);
+    }
+
+    #[test]
+    fn test_abbr_group_standardize_regex_variant() {
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup {
+                short: "CIR".into(),
+                long: "CIRCLE".into(),
+                variants: vec!["CIRC".into(), "C[IL]".into()],
+            },
+        ]);
+        // Literal variant
+        assert_eq!(table.standardize("CIRC"), Some((0, "CIR", "CIRCLE")));
+        // Regex variant matches
+        assert_eq!(table.standardize("CI"), Some((0, "CIR", "CIRCLE")));
+        assert_eq!(table.standardize("CL"), Some((0, "CIR", "CIRCLE")));
+    }
+
+    #[test]
+    fn test_abbr_group_longest_match_wins() {
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup {
+                short: "N".into(),
+                long: "NORTH".into(),
+                variants: vec![],
+            },
+            AbbrGroup {
+                short: "NE".into(),
+                long: "NORTHEAST".into(),
+                variants: vec!["N E".into()],
+            },
+        ]);
+        // "N E" should match NE group, not N group
+        assert_eq!(table.standardize("N E"), Some((1, "NE", "NORTHEAST")));
+        // "N" matches N group
+        assert_eq!(table.standardize("N"), Some((0, "N", "NORTH")));
+    }
+
+    #[test]
+    fn test_all_match_values() {
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup {
+                short: "AVE".into(),
+                long: "AVENUE".into(),
+                variants: vec!["AV".into()],
+            },
+        ]);
+        let values = table.all_match_values();
+        // Should contain canonical short, long, and variants — sorted longest first
+        assert!(values[0] == "AVENUE"); // longest
+        assert!(values.contains(&"AVE"));
+        assert!(values.contains(&"AV"));
     }
 }
