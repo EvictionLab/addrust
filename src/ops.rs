@@ -2,21 +2,27 @@ use fancy_regex::Regex;
 
 /// Extract a pattern from `source`, remove it, trim whitespace,
 /// and clean up any non-word characters left at the boundaries.
-pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<String> {
-    let m = pattern.find(source.as_str()).ok()??;
-    let extracted = m.as_str().to_string();
-    let start = m.start();
-    let end = m.end();
+/// Returns all capture groups (index 0 = full match). Returns None if no match or full match is empty.
+pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<Vec<Option<String>>> {
+    let caps = pattern.captures(source.as_str()).ok()??;
+    let full_match = caps.get(0)?;
+    let start = full_match.start();
+    let end = full_match.end();
+
+    // Collect all groups
+    let groups: Vec<Option<String>> = (0..caps.len())
+        .map(|i| caps.get(i).map(|m| m.as_str().trim().to_string()))
+        .collect();
 
     source.replace_range(start..end, "");
     squish(source);
     trim_nonword_boundaries(source);
 
-    let extracted = extracted.trim().to_string();
-    if extracted.is_empty() {
+    // Return None if full match was empty
+    if groups[0].as_ref().map_or(true, |s| s.is_empty()) {
         None
     } else {
-        Some(extracted)
+        Some(groups)
     }
 }
 
@@ -104,8 +110,8 @@ mod tests {
     fn test_extract_remove() {
         let re = Regex::new(r"^\d+").unwrap();
         let mut s = "123 MAIN ST".to_string();
-        let extracted = extract_remove(&mut s, &re);
-        assert_eq!(extracted, Some("123".to_string()));
+        let groups = extract_remove(&mut s, &re);
+        assert_eq!(groups.unwrap()[0].as_deref(), Some("123"));
         assert_eq!(s, "MAIN ST");
     }
 
@@ -113,9 +119,22 @@ mod tests {
     fn test_extract_remove_no_match() {
         let re = Regex::new(r"^\d+").unwrap();
         let mut s = "MAIN ST".to_string();
-        let extracted = extract_remove(&mut s, &re);
-        assert_eq!(extracted, None);
+        let groups = extract_remove(&mut s, &re);
+        assert!(groups.is_none());
         assert_eq!(s, "MAIN ST");
+    }
+
+    #[test]
+    fn test_extract_remove_groups() {
+        let re = Regex::new(r"(APT)\W*(\d+[A-Z]?)\s*$").unwrap();
+        let mut s = "123 MAIN ST APT 4B".to_string();
+        let groups = extract_remove(&mut s, &re);
+        assert!(groups.is_some());
+        let groups = groups.unwrap();
+        assert_eq!(groups[0].as_deref(), Some("APT 4B"));
+        assert_eq!(groups[1].as_deref(), Some("APT"));
+        assert_eq!(groups[2].as_deref(), Some("4B"));
+        assert_eq!(s, "123 MAIN ST");
     }
 
     #[test]

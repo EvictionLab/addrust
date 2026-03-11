@@ -199,7 +199,8 @@ pub fn apply_step(
                     return;
                 }
             }
-            if let Some(mut val) = extract_remove(&mut state.working, pattern) {
+            if let Some(groups) = extract_remove(&mut state.working, pattern) {
+                let mut val = groups[0].clone().unwrap_or_default();
                 if let Some((re, repl)) = replacement {
                     replace_pattern(&mut val, re, repl);
                 }
