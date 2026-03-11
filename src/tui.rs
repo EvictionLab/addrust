@@ -775,6 +775,12 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 continue;
             }
 
+            // Form mode: form consumes all keys (including Esc, Tab, s)
+            if app.form_state.is_some() {
+                handle_form_key(app, key.code);
+                continue;
+            }
+
             // Normal mode
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -800,9 +806,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 }
                 _ => match app.active_tab {
                     Tab::Steps => {
-                        if app.form_state.is_some() {
-                            handle_form_key(app, key.code);
-                        } else if app.step_detail_index.is_some() {
+                        if app.step_detail_index.is_some() {
                             handle_step_detail_key(app, key.code);
                         } else {
                             handle_rules_key(app, key.code);
@@ -2996,7 +3000,7 @@ fn handle_form_left_key(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Esc => {
+        KeyCode::Esc | KeyCode::Left => {
             close_form(app);
         }
         _ => {}
