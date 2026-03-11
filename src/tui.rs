@@ -6,7 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Tabs};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
@@ -93,6 +93,99 @@ const TARGET_FIELDS: &[(&str, &str)] = &[
 ];
 
 const STEP_TYPES: &[&str] = &["extract", "rewrite", "standardize"];
+
+/// Fields in the step editor form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormField {
+    Pattern,
+    TargetMode,   // Extract only: single vs multi
+    Target,       // Single target
+    Targets,      // Multi-target picker
+    SkipIfFilled, // Extract only
+    Replacement,
+    Table,
+    Source,
+    Mode,         // Standardize only: whole_field / per_word
+    Label,
+}
+
+/// Which panel has focus in the form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FormFocus {
+    Left,          // navigating field list
+    RightPattern,  // in pattern drill-down
+    RightTargets,  // in target picker
+    RightTable,    // in table picker
+    EditingText(String, usize, String), // field being text-edited (field_name, cursor, text)
+}
+
+/// State for the step editor form.
+#[derive(Debug, Clone)]
+struct FormState {
+    /// Index into App.steps of the step being edited, or None for new step.
+    step_index: Option<usize>,
+    /// Working copy of the StepDef being edited.
+    def: crate::step::StepDef,
+    /// Which fields are visible (computed from step type).
+    visible_fields: Vec<FormField>,
+    /// Cursor position in visible_fields.
+    field_cursor: usize,
+    /// Which panel has focus.
+    focus: FormFocus,
+    /// For right-panel list navigation (pattern segments, target fields, table list).
+    right_cursor: usize,
+    /// For pattern drill-down: which alternation group is expanded.
+    right_alt_selected: Option<usize>,
+    /// Parsed pattern segments for drill-down.
+    pattern_segments: Vec<crate::pattern::PatternSegment>,
+    /// Whether this is a new step (for cancel/discard behavior).
+    is_new: bool,
+    /// Show discard confirmation prompt.
+    show_discard_prompt: bool,
+}
+
+fn visible_fields_for_type(step_type: &str, def: &crate::step::StepDef) -> Vec<FormField> {
+    match step_type {
+        "extract" => {
+            let mut fields = vec![FormField::Pattern, FormField::TargetMode];
+            if def.targets.is_some() {
+                fields.push(FormField::Targets);
+            } else {
+                fields.push(FormField::Target);
+            }
+            fields.push(FormField::SkipIfFilled);
+            fields.push(FormField::Replacement);
+            fields.push(FormField::Source);
+            fields.push(FormField::Label);
+            fields
+        }
+        "rewrite" => {
+            let mut fields = vec![FormField::Pattern];
+            if def.table.is_some() {
+                fields.push(FormField::Table);
+            } else {
+                fields.push(FormField::Replacement);
+            }
+            fields.push(FormField::Source);
+            fields.push(FormField::Label);
+            fields
+        }
+        "standardize" => {
+            let mut fields = vec![];
+            if def.pattern.is_some() {
+                fields.push(FormField::Pattern);
+                fields.push(FormField::Replacement);
+            } else {
+                fields.push(FormField::Table);
+            }
+            fields.push(FormField::Target);
+            fields.push(FormField::Mode);
+            fields.push(FormField::Label);
+            fields
+        }
+        _ => vec![FormField::Label],
+    }
+}
 
 const TABLE_DESCRIPTIONS: &[(&str, &str)] = &[
     ("direction", "N/S/E/W, NORTH/SOUTH/EAST/WEST"),
@@ -222,6 +315,10 @@ struct App {
     // -- Custom steps --
     /// Wizard accumulator for building a new custom step.
     wizard_acc: WizardAccumulator,
+
+    // -- Step editor form --
+    /// Step editor form state (when open).
+    form_state: Option<FormState>,
     /// If Some, we're showing delete confirmation for a custom step at this index.
     confirm_delete: Option<usize>,
 }
@@ -453,6 +550,7 @@ impl App {
             output_list_state,
             wizard_acc: WizardAccumulator::default(),
             confirm_delete: None,
+            form_state: None,
         }
     }
 
@@ -702,7 +800,9 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 }
                 _ => match app.active_tab {
                     Tab::Steps => {
-                        if app.step_detail_index.is_some() {
+                        if app.form_state.is_some() {
+                            handle_form_key(app, key.code);
+                        } else if app.step_detail_index.is_some() {
                             handle_step_detail_key(app, key.code);
                         } else {
                             handle_rules_key(app, key.code);
@@ -783,12 +883,23 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Enter => {
-            if let Some(i) = app.steps_list_state.selected() {
-                let segments = crate::pattern::parse_pattern(app.steps[i].pattern_template());
-                app.step_detail_index = Some(i);
-                app.step_detail_segments = segments;
-                app.step_detail_selected = 0;
-                app.step_detail_alt_selected = None;
+            if let Some(selected) = app.steps_list_state.selected() {
+                let step = &app.steps[selected];
+                let def = step.def.clone();
+                let visible = visible_fields_for_type(&def.step_type, &def);
+                let segments = crate::pattern::parse_pattern(def.pattern.as_deref().unwrap_or(""));
+                app.form_state = Some(FormState {
+                    step_index: Some(selected),
+                    def,
+                    visible_fields: visible,
+                    field_cursor: 0,
+                    focus: FormFocus::Left,
+                    right_cursor: 0,
+                    right_alt_selected: None,
+                    pattern_segments: segments,
+                    is_new: false,
+                    show_discard_prompt: false,
+                });
             }
         }
         KeyCode::Char('m') => {
@@ -1711,7 +1822,13 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     // Content
     match app.active_tab {
-        Tab::Steps => render_steps(frame, app, content_area),
+        Tab::Steps => {
+            if app.form_state.is_some() {
+                render_step_form(frame, app, content_area);
+            } else {
+                render_steps(frame, app, content_area);
+            }
+        }
         Tab::Dictionaries => render_dict(frame, app, content_area),
         Tab::Output => render_output(frame, app, content_area),
     }
@@ -2410,6 +2527,614 @@ fn validate_pattern_template(template: &str) -> Result<(), String> {
     fancy_regex::Regex::new(&expanded)
         .map(|_| ())
         .map_err(|e| format!("{}", e))
+}
+
+// ---------------------------------------------------------------------------
+// Step editor form — rendering
+// ---------------------------------------------------------------------------
+
+fn render_step_form(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let form = match &app.form_state {
+        Some(f) => f,
+        None => return,
+    };
+
+    let step_state = form.step_index.map(|i| &app.steps[i]);
+
+    let [header_area, body_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Fill(1),
+    ]).areas(area);
+
+    // Header
+    let type_str = form.def.step_type.to_uppercase();
+    let origin = if step_state.map(|s| s.is_custom).unwrap_or(true) {
+        "CUSTOM STEP"
+    } else {
+        "DEFAULT STEP"
+    };
+    let modified = if step_state.map(|s| s.is_modified()).unwrap_or(false) {
+        Span::styled("  ● MODIFIED", Style::new().fg(Color::Yellow))
+    } else {
+        Span::raw("")
+    };
+
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(format!(" TYPE: {}     ", type_str), Style::new().fg(Color::Cyan)),
+        Span::styled(origin, Style::new().fg(Color::DarkGray)),
+        modified,
+    ]))
+    .block(Block::bordered().title(format!("Step: {}", form.def.label)));
+    frame.render_widget(header, header_area);
+
+    // Two panels
+    let [left_area, right_area] = Layout::horizontal([
+        Constraint::Percentage(44),
+        Constraint::Percentage(56),
+    ]).areas(body_area);
+
+    render_form_left_panel(frame, app, left_area);
+    render_form_right_panel(frame, app, right_area);
+
+    // Discard confirmation overlay
+    if form.show_discard_prompt {
+        let popup = centered_rect(50, 5, area);
+        frame.render_widget(ratatui::widgets::Clear, popup);
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                " Missing required fields. Discard step? (y/n) ",
+                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+        ])
+        .block(Block::bordered().title("Confirm"));
+        frame.render_widget(msg, popup);
+    }
+}
+
+fn render_form_left_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let form = app.form_state.as_ref().unwrap();
+    let step_state = form.step_index.map(|i| &app.steps[i]);
+
+    let mut items: Vec<ListItem> = Vec::new();
+
+    for (i, field) in form.visible_fields.iter().enumerate() {
+        let is_selected = form.focus == FormFocus::Left && form.field_cursor == i;
+        let is_modified = step_state.map(|s| s.is_field_modified(field_key(*field))).unwrap_or(false);
+
+        let prefix = if is_selected { "▸ " } else { "  " };
+        let mod_marker = if is_modified { "* " } else { "  " };
+        let (label, value) = form_field_display(*field, &form.def);
+
+        let style = if is_selected {
+            Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+
+        let mod_style = if is_modified {
+            Style::new().fg(Color::Yellow)
+        } else {
+            style
+        };
+
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(prefix, if is_selected { Style::new().fg(Color::Magenta) } else { Style::new() }),
+            Span::styled(mod_marker, mod_style),
+            Span::styled(format!("{:16}", label), style),
+            Span::styled(value, style),
+        ])));
+    }
+
+    let list = List::new(items)
+        .block(Block::bordered().border_style(
+            if form.focus == FormFocus::Left {
+                Style::new().fg(Color::Cyan)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            }
+        ));
+    frame.render_widget(list, area);
+}
+
+fn field_key(field: FormField) -> &'static str {
+    match field {
+        FormField::Pattern => "pattern",
+        FormField::TargetMode => "target",
+        FormField::Target => "target",
+        FormField::Targets => "targets",
+        FormField::SkipIfFilled => "skip_if_filled",
+        FormField::Replacement => "replacement",
+        FormField::Table => "table",
+        FormField::Source => "source",
+        FormField::Mode => "mode",
+        FormField::Label => "label",
+    }
+}
+
+fn form_field_display(field: FormField, def: &crate::step::StepDef) -> (&'static str, String) {
+    match field {
+        FormField::Pattern => ("Pattern", def.pattern.as_deref().unwrap_or("(none)").to_string()),
+        FormField::TargetMode => ("Target mode", if def.targets.is_some() { "Multiple targets" } else { "Single target" }.to_string()),
+        FormField::Target => ("Target", def.target.as_deref().unwrap_or("(none)").to_string()),
+        FormField::Targets => {
+            let t = def.targets.as_ref().map(|m| {
+                let mut pairs: Vec<_> = m.iter().collect();
+                pairs.sort_by_key(|(_, v)| *v);
+                pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(", ")
+            }).unwrap_or_default();
+            ("Targets", if t.is_empty() { "(none)".to_string() } else { t })
+        }
+        FormField::SkipIfFilled => ("Skip if filled", if def.skip_if_filled == Some(true) { "yes" } else { "no" }.to_string()),
+        FormField::Replacement => ("Replacement", def.replacement.as_deref().unwrap_or("(none)").to_string()),
+        FormField::Table => ("Table", def.table.as_deref().unwrap_or("(none)").to_string()),
+        FormField::Source => ("Source", def.source.as_deref().unwrap_or("working string").to_string()),
+        FormField::Mode => ("Mode", def.mode.as_deref().unwrap_or("whole field").to_string()),
+        FormField::Label => ("Label", def.label.clone()),
+    }
+}
+
+fn render_form_right_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let form = app.form_state.as_ref().unwrap();
+    let step_state = form.step_index.map(|i| &app.steps[i]);
+    let current_field = form.visible_fields.get(form.field_cursor).copied();
+
+    match &form.focus {
+        FormFocus::RightPattern => { render_form_pattern_panel(frame, app, area); return; }
+        FormFocus::RightTargets => { render_form_targets_panel(frame, app, area); return; }
+        FormFocus::RightTable => { render_form_table_panel(frame, app, area); return; }
+        FormFocus::EditingText(field_name, cursor, text) => {
+            render_form_text_edit_panel(frame, field_name, text, *cursor, area);
+            return;
+        }
+        FormFocus::Left => {}
+    }
+
+    match current_field {
+        Some(FormField::Pattern) => render_form_pattern_panel(frame, app, area),
+        Some(FormField::Targets) => render_form_targets_panel(frame, app, area),
+        Some(FormField::Table) => render_form_table_panel(frame, app, area),
+        Some(field) => render_form_help_panel(frame, field, &form.def, step_state, area),
+        None => {}
+    }
+}
+
+fn render_form_text_edit_panel(
+    frame: &mut Frame,
+    field_name: &str,
+    text: &str,
+    cursor: usize,
+    area: ratatui::layout::Rect,
+) {
+    let title = match field_name {
+        "replacement" => "Editing Replacement",
+        "label" => "Editing Label",
+        "pattern" => "Editing Pattern",
+        "add_alternative" => "Adding Alternative",
+        _ => "Editing",
+    };
+    let (before, after) = text.split_at(cursor.min(text.len()));
+    let cursor_char = if after.is_empty() { "_".to_string() } else { after[..1].to_string() };
+    let after_cursor = if after.len() > 1 { &after[1..] } else { "" };
+
+    let lines = vec![
+        Line::from(Span::styled(title, Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("Enter: confirm   Esc: cancel", Style::new().fg(Color::DarkGray))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(before, Style::new().fg(Color::White)),
+            Span::styled(cursor_char, Style::new().fg(Color::Black).bg(Color::White)),
+            Span::styled(after_cursor, Style::new().fg(Color::White)),
+        ]),
+    ];
+    let panel = Paragraph::new(lines)
+        .block(Block::bordered().border_style(Style::new().fg(Color::Cyan)));
+    frame.render_widget(panel, area);
+}
+
+fn render_form_help_panel(
+    frame: &mut Frame,
+    field: FormField,
+    def: &crate::step::StepDef,
+    step_state: Option<&StepState>,
+    area: ratatui::layout::Rect,
+) {
+    let (title, help_text, current_value, edit_hint) = match field {
+        FormField::SkipIfFilled => (
+            "Skip If Filled",
+            "When yes, this step is skipped if the target field(s) already have a value from a previous step.\n\nUse this for extraction steps that should only fire once.",
+            if def.skip_if_filled == Some(true) { "yes" } else { "no" },
+            "Space to toggle",
+        ),
+        FormField::Replacement => (
+            "Replacement",
+            "Text that replaces the matched pattern. Supports backreferences:\n\n  $1        - capture group 1\n  ${N:table} - look up group N in a table\n  ${N/M:fraction} - fraction (group N / group M)",
+            def.replacement.as_deref().unwrap_or("(none)"),
+            "Enter to edit",
+        ),
+        FormField::Source => (
+            "Source",
+            "Which text this step operates on.\n\n'working string' is the main address being parsed. Selecting a field makes the step operate on that extracted field instead.",
+            def.source.as_deref().unwrap_or("working string"),
+            "Enter to pick",
+        ),
+        FormField::Mode => (
+            "Mode",
+            "'Whole field' standardizes the entire field value as one lookup.\n\n'Per word' splits on spaces and standardizes each word independently.",
+            def.mode.as_deref().unwrap_or("whole field"),
+            "Space to toggle",
+        ),
+        FormField::Label => (
+            "Label",
+            "Unique identifier for this step. Used in config files for overrides, ordering, and disable lists.",
+            def.label.as_str(),
+            "Enter to edit",
+        ),
+        FormField::Target => (
+            "Target",
+            "The address field where the extracted value is stored.",
+            def.target.as_deref().unwrap_or("(none)"),
+            "Enter to pick",
+        ),
+        FormField::TargetMode => (
+            "Target Mode",
+            "Choose whether this step extracts to a single field or routes capture groups to multiple fields.",
+            if def.targets.is_some() { "Multiple targets" } else { "Single target" },
+            "Space to toggle",
+        ),
+        _ => return,
+    };
+
+    let is_modified = step_state.map(|s| s.is_field_modified(field_key(field))).unwrap_or(false);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(title, Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            if is_modified {
+                Span::styled("  ● modified", Style::new().fg(Color::Yellow))
+            } else {
+                Span::raw("")
+            },
+        ]),
+        Line::from(Span::styled(edit_hint, Style::new().fg(Color::DarkGray))),
+        Line::from(""),
+    ];
+
+    for para in help_text.split("\n\n") {
+        for line in para.lines() {
+            lines.push(Line::from(Span::styled(line, Style::new().fg(Color::White))));
+        }
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("Current: ", Style::new().fg(Color::DarkGray)),
+        Span::styled(current_value, Style::new().fg(Color::Yellow)),
+    ]));
+
+    if is_modified {
+        if let Some(step_state) = step_state {
+            if let Some(default_def) = &step_state.default_def {
+                let default_val = match field {
+                    FormField::Replacement => default_def.replacement.as_deref().unwrap_or("(none)"),
+                    FormField::Source => default_def.source.as_deref().unwrap_or("working string"),
+                    FormField::Target => default_def.target.as_deref().unwrap_or("(none)"),
+                    FormField::SkipIfFilled => if default_def.skip_if_filled == Some(true) { "yes" } else { "no" },
+                    FormField::Mode => default_def.mode.as_deref().unwrap_or("whole field"),
+                    _ => "",
+                };
+                if !default_val.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Default: ", Style::new().fg(Color::DarkGray)),
+                        Span::styled(default_val, Style::new().fg(Color::DarkGray)),
+                    ]));
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled("r to reset to default", Style::new().fg(Color::DarkGray))));
+                }
+            }
+        }
+    }
+
+    let panel = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
+    frame.render_widget(panel, area);
+}
+
+fn render_form_pattern_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let form = app.form_state.as_ref().unwrap();
+    let text = form.def.pattern.as_deref().unwrap_or("(no pattern)");
+    let panel = Paragraph::new(vec![
+        Line::from(Span::styled("Pattern", Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("e: edit raw regex   Enter: drill into group", Style::new().fg(Color::DarkGray))),
+        Line::from(""),
+        Line::from(Span::styled(text, Style::new().fg(Color::White))),
+    ])
+    .wrap(Wrap { trim: false })
+    .block(Block::bordered().border_style(Style::new().fg(
+        if matches!(form.focus, FormFocus::RightPattern) { Color::Cyan } else { Color::DarkGray }
+    )));
+    frame.render_widget(panel, area);
+}
+
+fn render_form_targets_panel(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
+    let panel = Paragraph::new("Targets (TODO)")
+        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
+    frame.render_widget(panel, area);
+}
+
+fn render_form_table_panel(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
+    let panel = Paragraph::new("Table picker (TODO)")
+        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
+    frame.render_widget(panel, area);
+}
+
+// ---------------------------------------------------------------------------
+// Step editor form — key handling
+// ---------------------------------------------------------------------------
+
+fn handle_form_key(app: &mut App, code: KeyCode) {
+    let form = match &mut app.form_state {
+        Some(f) => f,
+        None => return,
+    };
+
+    if form.show_discard_prompt {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.form_state = None;
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                form.show_discard_prompt = false;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match form.focus.clone() {
+        FormFocus::Left => handle_form_left_key(app, code),
+        FormFocus::RightPattern => handle_form_pattern_key(app, code),
+        FormFocus::RightTargets => handle_form_targets_key(app, code),
+        FormFocus::RightTable => handle_form_table_key(app, code),
+        FormFocus::EditingText(_, _, _) => handle_form_text_edit(app, code),
+    }
+}
+
+fn handle_form_left_key(app: &mut App, code: KeyCode) {
+    let form = app.form_state.as_mut().unwrap();
+    let field_count = form.visible_fields.len();
+
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            form.field_cursor = (form.field_cursor + 1) % field_count;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            form.field_cursor = if form.field_cursor == 0 { field_count - 1 } else { form.field_cursor - 1 };
+        }
+        KeyCode::Enter => {
+            let field = form.visible_fields[form.field_cursor];
+            match field {
+                FormField::Pattern => {
+                    form.focus = FormFocus::RightPattern;
+                    form.right_cursor = 0;
+                    form.right_alt_selected = None;
+                }
+                FormField::Targets => {
+                    form.focus = FormFocus::RightTargets;
+                    form.right_cursor = 0;
+                }
+                FormField::Table => {
+                    form.focus = FormFocus::RightTable;
+                    form.right_cursor = 0;
+                }
+                FormField::Target | FormField::Source => {
+                    form.focus = FormFocus::RightTargets;
+                    form.right_cursor = 0;
+                }
+                FormField::Replacement | FormField::Label => {
+                    let current = match field {
+                        FormField::Replacement => form.def.replacement.clone().unwrap_or_default(),
+                        FormField::Label => form.def.label.clone(),
+                        _ => String::new(),
+                    };
+                    let len = current.len();
+                    form.focus = FormFocus::EditingText(field_key(field).to_string(), len, current);
+                }
+                _ => {}
+            }
+        }
+        KeyCode::Char(' ') => {
+            let field = form.visible_fields[form.field_cursor];
+            match field {
+                FormField::SkipIfFilled => {
+                    let current = form.def.skip_if_filled.unwrap_or(false);
+                    form.def.skip_if_filled = Some(!current);
+                    app.dirty = true;
+                }
+                FormField::Mode => {
+                    let current = form.def.mode.as_deref();
+                    form.def.mode = if current == Some("per_word") { None } else { Some("per_word".to_string()) };
+                    app.dirty = true;
+                }
+                FormField::TargetMode => {
+                    if form.def.targets.is_some() {
+                        let first = form.def.targets.as_ref()
+                            .and_then(|m| m.keys().next().cloned());
+                        form.def.targets = None;
+                        form.def.target = first;
+                    } else {
+                        let mut map = std::collections::HashMap::new();
+                        if let Some(t) = form.def.target.take() {
+                            map.insert(t, 1);
+                        }
+                        form.def.targets = Some(map);
+                    }
+                    form.visible_fields = visible_fields_for_type(&form.def.step_type, &form.def);
+                    app.dirty = true;
+                }
+                _ => {}
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(step_idx) = form.step_index {
+                let step = &app.steps[step_idx];
+                if let Some(default) = &step.default_def {
+                    let field = form.visible_fields[form.field_cursor];
+                    match field {
+                        FormField::Pattern => form.def.pattern = default.pattern.clone(),
+                        FormField::Target => form.def.target = default.target.clone(),
+                        FormField::Targets => form.def.targets = default.targets.clone(),
+                        FormField::Replacement => form.def.replacement = default.replacement.clone(),
+                        FormField::SkipIfFilled => form.def.skip_if_filled = default.skip_if_filled,
+                        FormField::Table => form.def.table = default.table.clone(),
+                        FormField::Source => form.def.source = default.source.clone(),
+                        FormField::Mode => form.def.mode = default.mode.clone(),
+                        _ => {}
+                    }
+                    app.dirty = true;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            close_form(app);
+        }
+        _ => {}
+    }
+}
+
+fn close_form(app: &mut App) {
+    let form = app.form_state.as_mut().unwrap();
+
+    if form.is_new {
+        let valid = validate_step_def(&form.def);
+        if valid {
+            let def = form.def.clone();
+            let insert_idx = app.steps_list_state.selected().map(|i| i + 1).unwrap_or(app.steps.len());
+            app.steps.insert(insert_idx, StepState {
+                enabled: true,
+                default_enabled: true,
+                is_custom: true,
+                def,
+                default_def: None,
+            });
+            app.dirty = true;
+            app.form_state = None;
+        } else {
+            form.show_discard_prompt = true;
+        }
+    } else {
+        if let Some(idx) = form.step_index {
+            app.steps[idx].def = form.def.clone();
+            app.dirty = true;
+        }
+        app.form_state = None;
+    }
+}
+
+fn validate_step_def(def: &crate::step::StepDef) -> bool {
+    match def.step_type.as_str() {
+        "extract" => {
+            def.pattern.is_some()
+                && (def.target.is_some() || def.targets.as_ref().map(|t| !t.is_empty()).unwrap_or(false))
+        }
+        "rewrite" => {
+            def.pattern.is_some()
+                && (def.replacement.is_some() || def.table.is_some())
+        }
+        "standardize" => {
+            def.target.is_some()
+                && (def.table.is_some() || (def.pattern.is_some() && def.replacement.is_some()))
+        }
+        _ => false,
+    }
+}
+
+fn handle_form_pattern_key(app: &mut App, code: KeyCode) {
+    let form = app.form_state.as_mut().unwrap();
+    match code {
+        KeyCode::Char('e') => {
+            let text = form.def.pattern.clone().unwrap_or_default();
+            let len = text.len();
+            form.focus = FormFocus::EditingText("pattern".to_string(), len, text);
+        }
+        KeyCode::Esc => {
+            if form.right_alt_selected.is_some() {
+                form.right_alt_selected = None;
+            } else {
+                form.focus = FormFocus::Left;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_form_targets_key(app: &mut App, code: KeyCode) {
+    let form = app.form_state.as_mut().unwrap();
+    if code == KeyCode::Esc {
+        form.focus = FormFocus::Left;
+    }
+}
+
+fn handle_form_table_key(app: &mut App, code: KeyCode) {
+    let form = app.form_state.as_mut().unwrap();
+    if code == KeyCode::Esc {
+        form.focus = FormFocus::Left;
+    }
+}
+
+fn handle_form_text_edit(app: &mut App, code: KeyCode) {
+    let form = app.form_state.as_mut().unwrap();
+    if let FormFocus::EditingText(field_name, cursor, text) = &mut form.focus {
+        match code {
+            KeyCode::Enter => {
+                let value = text.clone();
+                let field = field_name.clone();
+                match field.as_str() {
+                    "replacement" => form.def.replacement = if value.is_empty() { None } else { Some(value) },
+                    "label" => if !value.is_empty() { form.def.label = value },
+                    "pattern" => {
+                        form.def.pattern = if value.is_empty() { None } else { Some(value) };
+                        form.pattern_segments = crate::pattern::parse_pattern(
+                            form.def.pattern.as_deref().unwrap_or("")
+                        );
+                    }
+                    "add_alternative" => {
+                        if !value.is_empty() {
+                            if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                                form.pattern_segments.get_mut(form.right_cursor)
+                            {
+                                alternatives.push(crate::pattern::Alternative { text: value, enabled: true });
+                                form.def.pattern = Some(crate::pattern::rebuild_pattern(&form.pattern_segments));
+                            }
+                        }
+                        form.focus = FormFocus::RightPattern;
+                        app.dirty = true;
+                        return;
+                    }
+                    _ => {}
+                }
+                form.focus = FormFocus::Left;
+                app.dirty = true;
+            }
+            KeyCode::Esc => {
+                form.focus = FormFocus::Left;
+            }
+            KeyCode::Backspace => {
+                if *cursor > 0 {
+                    text.remove(*cursor - 1);
+                    *cursor -= 1;
+                }
+            }
+            KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
+            KeyCode::Right => { if *cursor < text.len() { *cursor += 1; } }
+            KeyCode::Char(c) => {
+                text.insert(*cursor, c);
+                *cursor += 1;
+            }
+            _ => {}
+        }
+    }
 }
 
 fn centered_rect(
