@@ -30,9 +30,9 @@ Fields shown adapt to the step type. Irrelevant fields are hidden, not grayed ou
 |-------|---------|---------|-------------|
 | Pattern | yes | yes | optional (pattern-based only) |
 | Target mode | yes (single/multi) | — | — |
-| Target(s) | yes | — | yes |
+| Target / Targets | yes | — | yes (single only) |
 | Skip if filled | yes | — | — |
-| Replacement | yes (optional) | yes (if not table-driven) | yes (if pattern-based) |
+| Replacement | yes (optional) | yes (if not table-driven) | required if pattern-based (defaults to empty) |
 | Table | — | yes (if table-driven) | yes (if table-based) |
 | Source | yes | yes | — |
 | Mode | — | — | yes (whole field / per word) |
@@ -55,7 +55,22 @@ TYPE: EXTRACT     DEFAULT STEP  ● MODIFIED
 2. Land in the two-panel form with empty/default values. Fields are pre-populated with sensible defaults (e.g., skip_if_filled defaults to false, source defaults to working string).
 3. Fill in fields in any order — no forced sequence.
 4. Label auto-generates from type + target (e.g., `custom_extract_unit`) but is editable.
-5. Esc to finish (with validation that required fields are set: at minimum pattern and target/table depending on type).
+5. Esc to finish. Validates required fields before closing (see Validation below). If required fields are missing, shows a confirmation prompt: "Discard incomplete step? (y/n)".
+
+### Validation
+
+Required fields per step type (matching constraints in `compile_step`):
+
+| Step Type | Required Fields |
+|-----------|----------------|
+| Extract | pattern, and exactly one of target or targets |
+| Rewrite | pattern, and exactly one of replacement or table |
+| Standardize | target, and either (pattern + replacement) or table |
+
+When Esc is pressed:
+- **New step, all required fields set**: step is created, form closes.
+- **New step, missing required fields**: confirmation prompt to discard.
+- **Existing step**: changes apply to in-memory state immediately (persisted to disk only on Ctrl+S from main screen, same as all other TUI changes).
 
 ### Editing an Existing Step
 
@@ -113,7 +128,9 @@ Each `PrepRule` maps directly to a rewrite `StepDef`:
 - `replacement` → `replacement`
 - `source` → None (operates on working string)
 
-The `prepare()` function is replaced by the pipeline running these steps first. The `squish` and `to_uppercase` operations remain as fixed pre-processing (not configurable — they're structural, not domain-specific).
+The `prepare()` function is replaced by the pipeline running these steps first. The `squish` and `to_uppercase` operations remain as fixed pre-processing that runs before any steps (not configurable — they're structural, not domain-specific). The migrated rewrite steps assume input is already uppercased. Each rewrite step already calls `replace_all` and `squish` internally, so no new semantics are needed.
+
+The 11 target fields available in the target picker are: street_number, pre_direction, street_name, suffix, post_direction, unit, unit_type, po_box, building, extra_front, extra_back.
 
 ### Data Model Changes
 
@@ -121,28 +138,35 @@ The `prepare()` function is replaced by the pipeline running these steps first. 
 
 ```rust
 struct StepState {
-    label: String,
-    group: String,           // step type for display
-    action_desc: String,
-    pattern_template: String,
     enabled: bool,
     default_enabled: bool,
     is_custom: bool,
-    def: StepDef,            // full definition (new)
-    default_def: Option<StepDef>,  // original default for reset (new, None for custom)
+    def: StepDef,                  // full definition — source of truth for all fields
+    default_def: Option<StepDef>,  // original default for reset (None for custom steps)
 }
 ```
 
-The `custom_step_defs` HashMap is no longer needed — `StepState.def` replaces it.
+Display-only fields (`label`, `group`/step type, `action_desc`, `pattern_template`) are derived from `def` on demand rather than cached separately, avoiding drift. The `custom_step_defs` HashMap is no longer needed — `StepState.def` replaces it.
 
 ### Config Persistence
 
+Introduce a `step_overrides` config section — a label-keyed map of partial `StepDef` overrides, generalizing `pattern_overrides` to all fields. This preserves default step identity so future addrust updates to defaults flow through for non-overridden fields.
+
+```toml
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+skip_if_filled = false
+
+[steps.step_overrides.unit_type_value]
+targets = { unit_type = 1, unit = 2, building = 3 }
+```
+
 When saving, for each step:
 - **Custom steps**: Serialize `def` directly into `custom_steps` array.
-- **Default steps with modifications**: Determine what changed vs `default_def`:
-  - Pattern changes → `pattern_overrides`
-  - Other field changes → the step gets added to `custom_steps` with all fields, and the default step with the same label gets added to `disabled` (effectively replacing it). Alternatively, a new config field like `step_overrides` could be introduced to cleanly represent "this default step but with these fields changed." This is a design decision to resolve during implementation planning.
+- **Default steps with modifications**: Diff `def` against `default_def`. Write only changed fields into `step_overrides.<label>`. Pattern-only changes can also be written here (deprecating the separate `pattern_overrides` section, but still reading it for backward compat).
 - **Default steps with no modifications**: No config output needed.
+
+The `pattern_overrides` section is kept for backward compatibility (read but not written). New saves use `step_overrides` exclusively.
 
 ### Keybinding Summary
 
