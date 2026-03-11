@@ -930,7 +930,7 @@ skip_if_filled = true
         let re = Regex::new(r"(HIGHWAY)\s+(\d{1,3})").unwrap();
         let caps = re.captures("HIGHWAY 42").unwrap().unwrap();
         let result = expand_replacement("$1 ${2:number_cardinal}", &caps, &abbr);
-        assert_eq!(result, "HIGHWAY FORTY TWO");
+        assert_eq!(result, "HIGHWAY FORTYTWO");
     }
 
     #[test]
@@ -940,7 +940,7 @@ skip_if_filled = true
         let re = Regex::new(r"(\d{1,3})(ST|ND|RD|TH)").unwrap();
         let caps = re.captures("21ST").unwrap().unwrap();
         let result = expand_replacement("${1:number_ordinal}", &caps, &abbr);
-        assert_eq!(result, "TWENTY FIRST");
+        assert_eq!(result, "TWENTYFIRST");
     }
 
     #[test]
@@ -950,7 +950,7 @@ skip_if_filled = true
         let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
         let caps = re.captures("8 5/8").unwrap().unwrap();
         let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
-        assert_eq!(result, "EIGHT AND FIVE EIGHTHS");
+        assert_eq!(result, "EIGHT AND FIVEEIGHTHS");
     }
 
     #[test]
@@ -960,6 +960,6 @@ skip_if_filled = true
         let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
         let caps = re.captures("8 1/2").unwrap().unwrap();
         let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
-        assert_eq!(result, "EIGHT AND ONE HALF");
+        assert_eq!(result, "EIGHT AND ONEHALF");
     }
 }

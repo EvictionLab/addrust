@@ -579,12 +579,12 @@ mod tests {
         let tables = build_default_tables();
         let cardinal = tables.get("number_cardinal").unwrap();
         assert_eq!(cardinal.to_long("1"), Some("ONE"));
-        assert_eq!(cardinal.to_long("42"), Some("FORTY TWO"));
-        assert_eq!(cardinal.to_long("999"), Some("NINE HUNDRED NINETY NINE"));
+        assert_eq!(cardinal.to_long("42"), Some("FORTYTWO"));
+        assert_eq!(cardinal.to_long("999"), Some("NINEHUNDREDNINETYNINE"));
 
         let ordinal = tables.get("number_ordinal").unwrap();
         assert_eq!(ordinal.to_long("1"), Some("FIRST"));
-        assert_eq!(ordinal.to_long("21"), Some("TWENTY FIRST"));
+        assert_eq!(ordinal.to_long("21"), Some("TWENTYFIRST"));
     }
 
     #[test]

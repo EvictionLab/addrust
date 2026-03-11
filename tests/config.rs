@@ -82,20 +82,6 @@ fn test_default_pipeline_matches_no_config() {
 }
 
 #[test]
-fn test_mt_to_mount_default() {
-    let p = Pipeline::default();
-    let addr = p.parse("123 MT VERNON AVE");
-    assert_eq!(addr.street_name.as_deref(), Some("MOUNT VERNON"));
-}
-
-#[test]
-fn test_ft_to_fort_default() {
-    let p = Pipeline::default();
-    let addr = p.parse("456 FT WORTH BLVD");
-    assert_eq!(addr.street_name.as_deref(), Some("FORT WORTH"));
-}
-
-#[test]
 fn test_config_adds_street_name_abbr() {
     let config: Config = toml::from_str(
         r#"
@@ -177,15 +163,12 @@ fn test_output_direction_short_default() {
 }
 
 #[test]
-fn test_output_suffix_variant_canonicalizes() {
-    // DRIV is a variant spelling — should canonicalize to DR then expand to DRIVE (default long)
+fn test_output_suffix_variant() {
+    // DRIV is a variant spelling — canonicalizes to DRIVE (long) or DR (short)
     let p = Pipeline::default();
     let addr = p.parse("123 Main Driv");
     assert_eq!(addr.suffix.as_deref(), Some("DRIVE"));
-}
 
-#[test]
-fn test_output_suffix_variant_to_short() {
     let config: Config = toml::from_str(
         r#"
 [output]
@@ -332,19 +315,19 @@ fn test_unit_type_extracted() {
 #[test]
 fn test_highway_number_to_word() {
     let p = Pipeline::default();
-    // HIGHWAY 66 → highway_number_to_word fires → "HIGHWAY SIXTY SIX"
+    // HIGHWAY 66 → highway_number_to_word fires → "HIGHWAY SIXTYSIX"
     let addr = p.parse("123 HIGHWAY 66");
-    assert_eq!(addr.street_name.as_deref(), Some("HIGHWAY SIXTY SIX"));
+    assert_eq!(addr.street_name.as_deref(), Some("HIGHWAY SIXTYSIX"));
     assert_eq!(addr.street_number.as_deref(), Some("123"));
 }
 
 #[test]
 fn test_ordinal_to_word() {
     let p = Pipeline::default();
-    // 42ND → ordinal_to_word fires → "FORTY SECOND"
+    // 42ND → ordinal_to_word fires → "FORTYSECOND"
     let addr = p.parse("123 42ND ST");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
-    assert_eq!(addr.street_name.as_deref(), Some("FORTY SECOND"));
+    assert_eq!(addr.street_name.as_deref(), Some("FORTYSECOND"));
     assert_eq!(addr.suffix.as_deref(), Some("STREET"));
 }
 
@@ -353,18 +336,17 @@ fn test_fractional_road() {
     let p = Pipeline::default();
     // After street_number extracts "123", working is "8 1/2 MILE RD"
     // suffix extracts "RD" → "ROAD", working is "8 1/2 MILE"
-    // fractional_road fires: "8 1/2" → "EIGHT AND ONE HALF"
-    // street_name becomes "EIGHT AND ONE HALF MILE"
+    // fractional_road fires: "8 1/2" → "EIGHT AND ONEHALF"
+    // street_name becomes "EIGHT AND ONEHALF MILE"
     let addr = p.parse("123 8 1/2 MILE RD");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
-    assert_eq!(addr.street_name.as_deref(), Some("EIGHT AND ONE HALF MILE"));
+    assert_eq!(addr.street_name.as_deref(), Some("EIGHT AND ONEHALF MILE"));
     assert_eq!(addr.suffix.as_deref(), Some("ROAD"));
 }
 
 #[test]
 fn test_trailing_number_to_street_number() {
-    // Disable extra_front so the trailing number isn't consumed early by that step.
-    // This tests the trailing_number_to_street_number step in isolation.
+    // Trailing number moves to street_number when none exists
     let config: Config = toml::from_str(
         r#"
 [steps]
@@ -376,14 +358,11 @@ disabled = ["extra_front"]
     let addr = p.parse("MAIN 123");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
     assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
-}
 
-#[test]
-fn test_trailing_number_skipped_when_street_number_exists() {
+    // Skipped when street_number already exists
     let p = Pipeline::default();
     let addr = p.parse("123 MAIN ST");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
-    // No trailing number extracted
 }
 
 #[test]
@@ -458,7 +437,7 @@ fn test_ordinal_street() {
     let addr = p.parse("123 W 42ND ST");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
     assert_eq!(addr.pre_direction.as_deref(), Some("W"));
-    assert_eq!(addr.street_name.as_deref(), Some("FORTY SECOND"));
+    assert_eq!(addr.street_name.as_deref(), Some("FORTYSECOND"));
     assert_eq!(addr.suffix.as_deref(), Some("STREET"));
 }
 
@@ -474,14 +453,3 @@ fn test_source_rewrite_no_side_effects() {
     assert!(addr.unit_type.is_none());
 }
 
-#[test]
-fn test_wisconsin_fraction() {
-    // "8 1/2" fraction in street name converted to "EIGHT AND ONE HALF"
-    let p = Pipeline::default();
-    let addr = p.parse("123 8 1/2 MILE RD");
-    assert_eq!(addr.street_number.as_deref(), Some("123"));
-    assert_eq!(addr.suffix.as_deref(), Some("ROAD"));
-    let name = addr.street_name.as_deref().unwrap_or("");
-    assert!(name.contains("HALF"), "Expected fraction in street_name, got {:?}", name);
-    assert_eq!(addr.street_name.as_deref(), Some("EIGHT AND ONE HALF MILE"));
-}

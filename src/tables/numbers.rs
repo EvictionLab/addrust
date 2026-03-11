@@ -71,10 +71,10 @@ pub fn cardinal(n: u16) -> String {
         }
     }
 
-    parts.join(" ")
+    parts.join(" ").replace(' ', "")
 }
 
-/// Converts 1–999 to English ordinal words (e.g. 342 → "THREE HUNDRED FORTY SECOND").
+/// Converts 1–999 to English ordinal words (e.g. 342 → "THREEHUNDREDFORTYSECOND").
 pub fn ordinal(n: u16) -> String {
     assert!(n >= 1 && n <= 999, "ordinal: n must be 1–999, got {n}");
 
@@ -83,7 +83,7 @@ pub fn ordinal(n: u16) -> String {
 
     if hundreds > 0 && remainder == 0 {
         // e.g. 100 → "ONE HUNDREDTH", 200 → "TWO HUNDREDTH"
-        return format!("{} HUNDREDTH", ONES[hundreds]);
+        return format!("{}HUNDREDTH", ONES[hundreds]);
     }
 
     // Build the cardinal prefix for the hundreds part (if any)
@@ -107,8 +107,7 @@ pub fn ordinal(n: u16) -> String {
     };
 
     prefix.push_str(&ordinal_suffix);
-    // trim trailing space that could appear if prefix was non-empty but ordinal_suffix was empty
-    prefix.trim().to_string()
+    prefix.replace(' ', "")
 }
 
 /// Converts a fraction (numerator/denominator) to English words.
@@ -136,7 +135,7 @@ pub fn fraction(num: u16, den: u16) -> String {
         }
     };
 
-    format!("{num_word} {den_word}")
+    format!("{num_word}{den_word}")
 }
 
 use super::abbreviations::{Abbr, AbbrTable};
@@ -179,16 +178,16 @@ mod tests {
     #[test]
     fn test_cardinal_tens() {
         assert_eq!(cardinal(20), "TWENTY");
-        assert_eq!(cardinal(42), "FORTY TWO");
-        assert_eq!(cardinal(99), "NINETY NINE");
+        assert_eq!(cardinal(42), "FORTYTWO");
+        assert_eq!(cardinal(99), "NINETYNINE");
     }
 
     #[test]
     fn test_cardinal_hundreds() {
-        assert_eq!(cardinal(100), "ONE HUNDRED");
-        assert_eq!(cardinal(101), "ONE HUNDRED ONE");
-        assert_eq!(cardinal(999), "NINE HUNDRED NINETY NINE");
-        assert_eq!(cardinal(250), "TWO HUNDRED FIFTY");
+        assert_eq!(cardinal(100), "ONEHUNDRED");
+        assert_eq!(cardinal(101), "ONEHUNDREDONE");
+        assert_eq!(cardinal(999), "NINEHUNDREDNINETYNINE");
+        assert_eq!(cardinal(250), "TWOHUNDREDFIFTY");
     }
 
     #[test]
@@ -202,23 +201,23 @@ mod tests {
     #[test]
     fn test_ordinal_regular() {
         assert_eq!(ordinal(4), "FOURTH");
-        assert_eq!(ordinal(21), "TWENTY FIRST");
-        assert_eq!(ordinal(100), "ONE HUNDREDTH");
-        assert_eq!(ordinal(101), "ONE HUNDRED FIRST");
-        assert_eq!(ordinal(999), "NINE HUNDRED NINETY NINTH");
+        assert_eq!(ordinal(21), "TWENTYFIRST");
+        assert_eq!(ordinal(100), "ONEHUNDREDTH");
+        assert_eq!(ordinal(101), "ONEHUNDREDFIRST");
+        assert_eq!(ordinal(999), "NINEHUNDREDNINETYNINTH");
     }
 
     #[test]
     fn test_fraction_half() {
-        assert_eq!(fraction(1, 2), "ONE HALF");
-        assert_eq!(fraction(5, 2), "FIVE HALF");
+        assert_eq!(fraction(1, 2), "ONEHALF");
+        assert_eq!(fraction(5, 2), "FIVEHALF");
     }
 
     #[test]
     fn test_fraction_regular() {
-        assert_eq!(fraction(1, 4), "ONE FOURTH");
-        assert_eq!(fraction(3, 4), "THREE FOURTHS");
-        assert_eq!(fraction(1, 8), "ONE EIGHTH");
-        assert_eq!(fraction(5, 8), "FIVE EIGHTHS");
+        assert_eq!(fraction(1, 4), "ONEFOURTH");
+        assert_eq!(fraction(3, 4), "THREEFOURTHS");
+        assert_eq!(fraction(1, 8), "ONEEIGHTH");
+        assert_eq!(fraction(5, 8), "FIVEEIGHTHS");
     }
 }
