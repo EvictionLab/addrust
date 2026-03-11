@@ -415,6 +415,9 @@ pub fn build_default_tables() -> Abbreviations {
     tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
     tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
+    let (number_cardinal, number_ordinal) = crate::tables::numbers::build_number_tables();
+    tables.insert("number_cardinal".to_string(), number_cardinal);
+    tables.insert("number_ordinal".to_string(), number_ordinal);
     Abbreviations { tables }
 }
 
@@ -430,6 +433,9 @@ pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(|| {
     tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
     tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
+    let (number_cardinal, number_ordinal) = crate::tables::numbers::build_number_tables();
+    tables.insert("number_cardinal".to_string(), number_cardinal);
+    tables.insert("number_ordinal".to_string(), number_ordinal);
     Abbreviations { tables }
 });
 
@@ -566,6 +572,19 @@ mod tests {
         );
         assert_eq!(table.pattern_template.as_deref(), Some(r"\b({direction})\b"));
         assert_eq!(table.to_long("N"), Some("NORTH"));
+    }
+
+    #[test]
+    fn test_number_tables_registered() {
+        let tables = build_default_tables();
+        let cardinal = tables.get("number_cardinal").unwrap();
+        assert_eq!(cardinal.to_long("1"), Some("ONE"));
+        assert_eq!(cardinal.to_long("42"), Some("FORTY TWO"));
+        assert_eq!(cardinal.to_long("999"), Some("NINE HUNDRED NINETY NINE"));
+
+        let ordinal = tables.get("number_ordinal").unwrap();
+        assert_eq!(ordinal.to_long("1"), Some("FIRST"));
+        assert_eq!(ordinal.to_long("21"), Some("TWENTY FIRST"));
     }
 
     #[test]

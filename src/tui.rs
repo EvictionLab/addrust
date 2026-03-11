@@ -1339,6 +1339,7 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                     target: acc.target.clone(),
                     replacement: acc.replacement.clone(),
                     skip_if_filled: acc.skip_if_filled,
+                    source: None,
                     matching_table: acc.matching_table.clone(),
                     format_table: acc.format_table.clone(),
                     mode: acc.mode.clone(),

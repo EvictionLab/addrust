@@ -82,6 +82,7 @@ pub enum Step {
         pattern_template: String,
         replacement: Option<String>,
         rewrite_table: Option<String>,
+        source: Option<Field>,
         enabled: bool,
     },
     Extract {
@@ -91,6 +92,7 @@ pub enum Step {
         target: Field,
         skip_if_filled: bool,
         replacement: Option<(Regex, String)>,
+        source: Option<Field>,
         enabled: bool,
     },
     Standardize {
@@ -177,29 +179,54 @@ pub fn apply_step(
     }
 
     match step {
-        Step::Rewrite { pattern, replacement, rewrite_table, .. } => {
-            if !pattern.is_match(&state.working).unwrap_or(false) {
+        Step::Rewrite { pattern, replacement, rewrite_table, source, .. } => {
+            let target_str = match source {
+                Some(field) => match state.fields.field(*field) {
+                    Some(v) => v.clone(),
+                    None => return,
+                },
+                None => state.working.clone(),
+            };
+            if !pattern.is_match(&target_str).unwrap_or(false) {
                 return;
             }
+            let mut result = target_str;
             if let Some(table_name) = rewrite_table {
                 if let Some(table) = tables.get(table_name) {
                     for (short, long) in table.short_to_long_pairs() {
                         let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
-                        replace_pattern(&mut state.working, &re, &long);
+                        replace_pattern(&mut result, &re, &long);
                     }
                 }
             } else if let Some(repl) = replacement {
-                replace_pattern(&mut state.working, pattern, repl);
+                replace_pattern(&mut result, pattern, repl);
             }
-            squish(&mut state.working);
+            squish(&mut result);
+            match source {
+                Some(field) => *state.fields.field_mut(*field) = none_if_empty(result),
+                None => state.working = result,
+            }
         }
-        Step::Extract { pattern, target, skip_if_filled, replacement, .. } => {
+        Step::Extract { pattern, target, skip_if_filled, replacement, source, .. } => {
             if *skip_if_filled {
                 if state.fields.field(*target).is_some() {
                     return;
                 }
             }
-            if let Some(groups) = extract_remove(&mut state.working, pattern) {
+            let extract_result = match source {
+                Some(field) => {
+                    let field_val = match state.fields.field(*field) {
+                        Some(v) => v.clone(),
+                        None => return,
+                    };
+                    let mut src = field_val;
+                    let result = extract_remove(&mut src, pattern);
+                    *state.fields.field_mut(*field) = none_if_empty(src);
+                    result
+                },
+                None => extract_remove(&mut state.working, pattern),
+            };
+            if let Some(groups) = extract_result {
                 let mut val = groups[0].clone().unwrap_or_default();
                 if let Some((re, repl)) = replacement {
                     replace_pattern(&mut val, re, repl);
@@ -279,6 +306,8 @@ pub struct StepDef {
     pub format_table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -314,12 +343,14 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let expanded = expand_template(template, abbr);
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
+            let source = def.source.as_ref().map(|s| parse_field(s)).transpose()?;
             Ok(Step::Rewrite {
                 label: def.label.clone(),
                 pattern,
                 pattern_template: template.clone(),
                 replacement: def.replacement.clone(),
                 rewrite_table: def.table.clone(),
+                source,
                 enabled: true,
             })
         }
@@ -368,6 +399,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 None
             };
 
+            let source = def.source.as_ref().map(|s| parse_field(s)).transpose()?;
             Ok(Step::Extract {
                 label: def.label.clone(),
                 pattern,
@@ -375,6 +407,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 target: parse_field(target)?,
                 skip_if_filled: def.skip_if_filled.unwrap_or(false),
                 replacement,
+                source,
                 enabled: true,
             })
         }
@@ -474,7 +507,7 @@ mod tests {
             label: "test_rewrite".to_string(),
             pattern: Some(r"STAPT".to_string()),
             replacement: Some("ST APT".to_string()),
-            table: None, target: None,
+            table: None, target: None, source: None,
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
@@ -516,7 +549,7 @@ table = "street_name_abbr"
             label: "test_number".to_string(),
             pattern: Some(r"^\d+\b".to_string()),
             replacement: None,
-            table: None, target: Some("street_number".to_string()),
+            table: None, target: Some("street_number".to_string()), source: None,
             skip_if_filled: Some(true),
             matching_table: None, format_table: None, mode: None,
         };
@@ -537,7 +570,7 @@ table = "street_name_abbr"
         let def = StepDef {
             step_type: "standardize".to_string(),
             label: "std_suffix".to_string(),
-            pattern: None, replacement: None, table: None,
+            pattern: None, replacement: None, table: None, source: None,
             target: Some("suffix".to_string()),
             skip_if_filled: None,
             matching_table: Some("suffix_all".to_string()),
@@ -617,6 +650,7 @@ table = "street_name_abbr"
             table: None,
             target: Some("po_box".to_string()),
             replacement: None,
+            source: None,
             skip_if_filled: Some(true),
             matching_table: None,
             format_table: None,

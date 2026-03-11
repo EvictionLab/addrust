@@ -254,7 +254,7 @@ skip_if_filled = true
         sc.custom_steps = vec![crate::step::StepDef {
             step_type: "rewrite".to_string(),
             label: "test".to_string(),
-            pattern: None, table: None, target: None, replacement: None,
+            pattern: None, table: None, target: None, replacement: None, source: None,
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
         }];
         assert!(!sc.is_empty());
