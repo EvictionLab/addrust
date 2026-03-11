@@ -290,7 +290,7 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
         let summaries = p.step_summaries();
         assert!(!summaries.is_empty());
         assert_eq!(summaries[0].step_type, "rewrite");
-        assert_eq!(summaries[0].label, "na_check");
+        assert_eq!(summaries[0].label, "prep_fix_ampersand");
     }
 
     #[test]
@@ -335,8 +335,13 @@ step_order = ["suffix_common", "na_check"]
         assert_eq!(summaries[0].label, "suffix_common");
         assert_eq!(summaries[1].label, "na_check");
         // Remaining steps should follow in their default relative order
-        assert_eq!(summaries[2].label, "city_state_zip");
-        assert_eq!(summaries[3].label, "po_box");
+        // First unordered step is prep_fix_ampersand (first in steps.toml)
+        assert_eq!(summaries[2].label, "prep_fix_ampersand");
+        // city_state_zip and po_box follow after all prep steps
+        let labels: Vec<&str> = summaries.iter().map(|s| s.label.as_str()).collect();
+        let csz_pos = labels.iter().position(|l| *l == "city_state_zip").unwrap();
+        let po_box_pos = labels.iter().position(|l| *l == "po_box").unwrap();
+        assert!(csz_pos < po_box_pos);
     }
 
     #[test]

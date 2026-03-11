@@ -1,11 +1,90 @@
 # addrust default pipeline steps
 # Order matters — steps execute top to bottom.
 
+# --- Pre-cleaning (migrated from prepare.rs) ---
+[[step]]
+type = "rewrite"
+label = "prep_fix_ampersand"
+pattern = '&AMP;'
+replacement = '&'
+
+[[step]]
+type = "rewrite"
+label = "prep_dedup_nonword"
+pattern = '(\W)\1+'
+replacement = '$1'
+
+[[step]]
+type = "rewrite"
+label = "prep_period_between"
+pattern = '([^\s])\.([^\s])'
+replacement = '$1 $2'
+
+[[step]]
+type = "rewrite"
+label = "prep_hyphen_spaces"
+pattern = '([A-Z0-9])\s*-\s*([A-Z0-9])'
+replacement = '$1-$2'
+
+[[step]]
+type = "rewrite"
+label = "prep_unstick_number_letters"
+pattern = '^(\d+)([A-Z]{2,})'
+replacement = '$1 $2'
+
+[[step]]
+type = "rewrite"
+label = "prep_stick_dir_number"
+pattern = '^([NSEW]) (\d+)\b'
+replacement = '${1}${2}'
+
+[[step]]
+type = "rewrite"
+label = "prep_pound_ordinal"
+pattern = '#(\d+[RNTS][DHT])'
+replacement = '$1'
+
+[[step]]
+type = "rewrite"
+label = "prep_ampersand_to_and"
+pattern = '([A-Z])\s*&\s*([A-Z])'
+replacement = '$1 AND $2'
+
+[[step]]
+type = "rewrite"
+label = "prep_slash_to_space"
+pattern = '(?<!\d)/(?!\d)'
+replacement = ' '
+
+[[step]]
+type = "rewrite"
+label = "prep_trailing_nonword"
+pattern = '\W+$'
+replacement = ''
+
+[[step]]
+type = "rewrite"
+label = "prep_remove_periods_apostrophes"
+pattern = "[.']+"
+replacement = ''
+
+[[step]]
+type = "rewrite"
+label = "prep_remove_punctuation"
+pattern = '[;<>$()"]+|`'
+replacement = ''
+
+[[step]]
+type = "rewrite"
+label = "prep_mlk"
+pattern = '(?:(?:DR|DOCTOR)\W*)?M(?:ARTIN)?\W*L(?:UTHER)?\W*K(?:ING)?(?:\W+(?:JR|JUNIOR))?'
+replacement = 'MARTIN LUTHER KING'
+
 # --- NA removal ---
 [[step]]
 type = "rewrite"
 label = "na_check"
-pattern = '(?i)^(N/?A|{na_values})$'
+pattern = '(?i)^(N\W?A|{na_values})$'
 replacement = ''
 
 # --- City / State / Zip ---

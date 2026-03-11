@@ -617,7 +617,7 @@ mod tests {
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
         assert!(defs.step.len() > 20, "Expected 20+ steps, got {}", defs.step.len());
         assert_eq!(defs.step[0].step_type, "rewrite");
-        assert_eq!(defs.step[0].label, "na_check");
+        assert_eq!(defs.step[0].label, "prep_fix_ampersand");
         let last = defs.step.last().unwrap();
         assert_eq!(last.step_type, "standardize");
     }
@@ -631,7 +631,7 @@ mod tests {
         let steps = compile_steps(&defs.step, &abbr);
         assert!(steps.len() > 20);
         assert_eq!(steps[0].step_type(), "rewrite");
-        assert_eq!(steps[0].label(), "na_check");
+        assert_eq!(steps[0].label(), "prep_fix_ampersand");
     }
 
     #[test]

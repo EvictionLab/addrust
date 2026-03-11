@@ -506,6 +506,16 @@ po_box = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
 }
 
 #[test]
+fn test_prepare_steps_in_pipeline() {
+    let config = Config::default();
+    let p = Pipeline::from_config(&config);
+    let summaries = p.step_summaries();
+    // First steps should be prepare rules
+    assert_eq!(summaries[0].label, "prep_fix_ampersand");
+    assert_eq!(summaries[0].step_type, "rewrite");
+}
+
+#[test]
 fn test_step_overrides_override_pattern_overrides() {
     // step_overrides takes precedence over pattern_overrides
     let config: Config = toml::from_str(
