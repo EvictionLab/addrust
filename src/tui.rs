@@ -441,6 +441,7 @@ impl App {
                         overrides.add.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
+                            ..Default::default()
                         });
                     }
                     EntryStatus::Removed => {
@@ -450,6 +451,7 @@ impl App {
                         overrides.override_entries.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
+                            ..Default::default()
                         });
                     }
                     EntryStatus::Default => {}

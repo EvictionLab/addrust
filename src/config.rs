@@ -102,10 +102,14 @@ pub struct DictOverrides {
     pub override_entries: Vec<DictEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
 pub struct DictEntry {
     pub short: String,
     pub long: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical: Option<bool>,
 }
 
 impl Config {
@@ -169,9 +173,9 @@ mod tests {
             r"(?<!^)\b({suffix_common})\s*$".to_string(),
         );
         config.dictionaries.insert("unit_type".to_string(), DictOverrides {
-            add: vec![DictEntry { short: "WH".into(), long: "WAREHOUSE".into() }],
+            add: vec![DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() }],
             remove: vec![],
-            override_entries: vec![DictEntry { short: "STE".into(), long: "SUITE NUMBER".into() }],
+            override_entries: vec![DictEntry { short: "STE".into(), long: "SUITE NUMBER".into(), ..Default::default() }],
         });
         config.output.suffix = OutputFormat::Short;
         config.output.direction = OutputFormat::Long;
