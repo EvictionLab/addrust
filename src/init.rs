@@ -34,9 +34,9 @@ pub fn generate_default_config() -> String {
     for name in tables.table_names() {
         let table = tables.get(name).unwrap();
         out.push_str(&format!("# [dictionaries.{}]\n", name));
-        out.push_str(&format!("# {} entries. Examples:\n", table.entries.len()));
-        for entry in table.entries.iter().take(3) {
-            out.push_str(&format!("#   {} -> {}\n", entry.short, entry.long));
+        out.push_str(&format!("# {} entries. Examples:\n", table.groups.len()));
+        for group in table.groups.iter().take(3) {
+            out.push_str(&format!("#   {} -> {}\n", group.short, group.long));
         }
         out.push_str("# add = [{ short = \"XX\", long = \"EXAMPLE\" }]\n");
         out.push_str("# remove = [\"VALUE\"]\n");

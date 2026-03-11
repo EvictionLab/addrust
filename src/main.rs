@@ -239,15 +239,15 @@ fn main() {
                         None => {
                             for name in tables.table_names() {
                                 let table = tables.get(name).unwrap();
-                                println!("{:20} ({} entries)", name, table.entries.len());
+                                println!("{:20} ({} entries)", name, table.groups.len());
                             }
                         }
                         Some(ref name) => {
                             match tables.get(name) {
                                 Some(table) => {
-                                    println!("{} ({} entries):", name, table.entries.len());
-                                    for entry in &table.entries {
-                                        println!("  {:20} -> {}", entry.short, entry.long);
+                                    println!("{} ({} entries):", name, table.groups.len());
+                                    for group in &table.groups {
+                                        println!("  {:20} -> {}", group.short, group.long);
                                     }
                                 }
                                 None => {

@@ -212,7 +212,7 @@ type = "standardize"
 label = "standardize_suffix"
 target = "suffix"
 matching_table = "suffix_all"
-format_table = "suffix_usps"
+format_table = "suffix_all"
 
 [[step]]
 type = "standardize"

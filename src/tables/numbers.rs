@@ -138,25 +138,27 @@ pub fn fraction(num: u16, den: u16) -> String {
     format!("{num_word}{den_word}")
 }
 
-use super::abbreviations::{Abbr, AbbrTable};
+use super::abbreviations::{AbbrGroup, AbbrTable};
 
 /// Build cardinal and ordinal lookup tables for 1-999.
 pub fn build_number_tables() -> (AbbrTable, AbbrTable) {
-    let mut cardinal_entries = Vec::with_capacity(999);
-    let mut ordinal_entries = Vec::with_capacity(999);
+    let mut cardinal_groups = Vec::with_capacity(999);
+    let mut ordinal_groups = Vec::with_capacity(999);
 
     for n in 1..=999u16 {
-        cardinal_entries.push(Abbr {
+        cardinal_groups.push(AbbrGroup {
             short: n.to_string(),
             long: cardinal(n),
+            variants: vec![],
         });
-        ordinal_entries.push(Abbr {
+        ordinal_groups.push(AbbrGroup {
             short: n.to_string(),
             long: ordinal(n),
+            variants: vec![],
         });
     }
 
-    (AbbrTable::new(cardinal_entries), AbbrTable::new(ordinal_entries))
+    (AbbrTable::from_groups(cardinal_groups), AbbrTable::from_groups(ordinal_groups))
 }
 
 #[cfg(test)]

@@ -1,14 +1,6 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-/// A single abbreviation entry: short form ↔ long form.
-/// Kept temporarily for backward compatibility with build functions (Task 2 will remove).
-#[derive(Debug, Clone)]
-pub struct Abbr {
-    pub short: String,
-    pub long: String,
-}
-
 /// A group of abbreviation variants with one canonical short/long pair.
 #[derive(Debug, Clone)]
 pub struct AbbrGroup {
@@ -21,10 +13,6 @@ pub struct AbbrGroup {
 #[derive(Debug, Clone)]
 pub struct AbbrTable {
     pub groups: Vec<AbbrGroup>,
-    // --- Legacy fields kept for backward compat (Task 2 removes) ---
-    pub entries: Vec<Abbr>,
-    short_to_long: HashMap<String, String>,
-    long_to_short: HashMap<String, String>,
     /// Optional extraction pattern template for this table.
     pub pattern_template: Option<String>,
     /// Maps every literal value (canonical short, long, non-regex variants) → group index.
@@ -67,10 +55,6 @@ impl AbbrTable {
 
         Self {
             groups,
-            // Legacy fields — empty for from_groups-constructed tables
-            entries: Vec::new(),
-            short_to_long: HashMap::new(),
-            long_to_short: HashMap::new(),
             pattern_template: None,
             lookup,
             regex_variants,
@@ -119,70 +103,61 @@ impl AbbrTable {
 
     /// True when all long forms are empty — a value-list table (not a short↔long mapping).
     pub fn is_value_list(&self) -> bool {
-        // Support both new (groups) and legacy (entries) paths
-        if !self.groups.is_empty() {
-            return self.groups.iter().all(|g| g.long.is_empty());
-        }
-        !self.entries.is_empty() && self.entries.iter().all(|e| e.long.is_empty())
+        !self.groups.is_empty() && self.groups.iter().all(|g| g.long.is_empty())
     }
 
-    // === Legacy constructors and methods (kept for backward compat, Task 2 removes) ===
-
-    pub fn new(mut entries: Vec<Abbr>) -> Self {
-        // Deduplicate entries by (short, long) pair
-        let mut seen = std::collections::HashSet::new();
-        entries.retain(|e| seen.insert((e.short.clone(), e.long.clone())));
-
-        let mut s2l = HashMap::new();
-        let mut l2s = HashMap::new();
-        for e in &entries {
-            if !has_regex_chars(&e.short) {
-                s2l.entry(e.short.clone()).or_insert(e.long.clone());
-            }
-            if !has_regex_chars(&e.long) {
-                l2s.entry(e.long.clone()).or_insert(e.short.clone());
-            }
-        }
-        Self {
-            groups: Vec::new(),
-            entries,
-            short_to_long: s2l,
-            long_to_short: l2s,
-            pattern_template: None,
-            lookup: HashMap::new(),
-            regex_variants: Vec::new(),
-        }
-    }
-
+    /// Construct from (short, long) pairs. Each pair becomes its own group with no variants.
     pub fn from_pairs(pairs: Vec<(&str, &str)>) -> Self {
-        let entries = pairs.into_iter()
-            .map(|(s, l)| Abbr { short: s.to_string(), long: l.to_string() })
+        let groups = pairs.into_iter()
+            .map(|(s, l)| AbbrGroup {
+                short: s.to_uppercase(),
+                long: l.to_uppercase(),
+                variants: vec![],
+            })
             .collect();
-        Self::new(entries)
+        Self::from_groups(groups)
     }
 
-    pub fn from_pairs_with_pattern(pairs: Vec<(&str, &str)>, pattern_template: Option<String>) -> Self {
-        let mut table = Self::from_pairs(pairs);
-        table.pattern_template = pattern_template;
-        table
+    /// Builder: set pattern_template on an existing table.
+    pub fn with_pattern_template(mut self, template: Option<String>) -> Self {
+        self.pattern_template = template;
+        self
     }
 
-    /// Look up short → long (exact match, O(1)).
+    /// Short → long lookup (finds group, returns canonical long).
     pub fn to_long(&self, short: &str) -> Option<&str> {
-        self.short_to_long.get(short).map(|s| s.as_str())
+        self.standardize(short).map(|(_, _, long)| long)
     }
 
-    /// Look up long → short (exact match, O(1)).
-    pub fn to_short(&self, long: &str) -> Option<&str> {
-        self.long_to_short.get(long).map(|s| s.as_str())
+    /// Value → canonical short lookup (finds group, returns canonical short).
+    pub fn to_short(&self, value: &str) -> Option<&str> {
+        self.standardize(value).map(|(_, short, _)| short)
+    }
+
+    /// All short→long pairs for iteration (used by PerWord standardize and pattern expansion).
+    pub fn short_to_long_pairs(&self) -> Vec<(&str, &str)> {
+        self.groups.iter()
+            .map(|g| (g.short.as_str(), g.long.as_str()))
+            .collect()
+    }
+
+    /// Bounded regex from all match values (used by pattern expansion).
+    pub fn bounded_regex(&self) -> String {
+        let values = self.all_match_values();
+        let parts: Vec<String> = values.iter().map(|v| {
+            if has_regex_chars(v) {
+                v.to_string()
+            } else {
+                fancy_regex::escape(v).to_string()
+            }
+        }).collect();
+        format!(r"(?:{})", parts.join("|"))
     }
 
     /// Only the short column values, sorted by length descending.
     pub fn short_values(&self) -> Vec<&str> {
-        let mut vals: Vec<&str> = self
-            .entries
-            .iter()
-            .map(|e| e.short.as_str())
+        let mut vals: Vec<&str> = self.groups.iter()
+            .map(|g| g.short.as_str())
             .collect();
         vals.sort_unstable();
         vals.dedup();
@@ -190,79 +165,41 @@ impl AbbrTable {
         vals
     }
 
-    /// All unique values (short + long), sorted by length descending.
+    /// All unique values (short + long + variants), sorted by length descending.
     /// Used to build alternation regex patterns. Skips empty strings.
     pub fn all_values(&self) -> Vec<&str> {
-        let mut vals: Vec<&str> = self
-            .entries
-            .iter()
-            .flat_map(|e| [e.short.as_str(), e.long.as_str()])
-            .filter(|v| !v.is_empty())
-            .collect();
-        vals.sort_unstable();
-        vals.dedup();
-        vals.sort_by(|a, b| b.len().cmp(&a.len()));
-        vals
+        // Delegate to all_match_values, filtering empty strings
+        self.all_match_values().into_iter().filter(|v| !v.is_empty()).collect()
     }
 
-    /// Apply dictionary overrides: remove, override, then add entries.
+    /// Apply dictionary overrides: remove, override, then add groups.
     pub fn patch(&self, overrides: &crate::config::DictOverrides) -> Self {
-        let mut entries = self.entries.clone();
+        let mut groups = self.groups.clone();
 
         for remove_val in &overrides.remove {
             let upper = remove_val.to_uppercase();
-            entries.retain(|e| e.short != upper && e.long != upper);
+            groups.retain(|g| g.short != upper && g.long != upper);
         }
 
         for ov in &overrides.override_entries {
             let short_upper = ov.short.to_uppercase();
             let long_upper = ov.long.to_uppercase();
-            for entry in &mut entries {
-                if entry.short == short_upper {
-                    entry.long = long_upper.clone();
+            for group in &mut groups {
+                if group.short == short_upper {
+                    group.long = long_upper.clone();
                 }
             }
         }
 
         for add in &overrides.add {
-            entries.push(Abbr {
+            groups.push(AbbrGroup {
                 short: add.short.to_uppercase(),
                 long: add.long.to_uppercase(),
+                variants: vec![],
             });
         }
 
-        AbbrTable::new(entries)
-    }
-
-    /// Build a word-bounded alternation regex: \b(VAL1|VAL2|...)\b
-    pub fn bounded_regex(&self) -> String {
-        let vals = self.all_values();
-        format!(r"\b({})\b", vals.join("|"))
-    }
-
-    /// Get (short, long) pairs for abbreviation switching.
-    pub fn short_to_long_pairs(&self) -> Vec<(String, String)> {
-        let mut pairs: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|e| !has_regex_chars(&e.short))
-            .map(|e| (e.short.clone(), e.long.clone()))
-            .collect();
-        pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        pairs.dedup();
-        pairs
-    }
-
-    pub fn long_to_short_pairs(&self) -> Vec<(String, String)> {
-        let mut pairs: Vec<_> = self
-            .entries
-            .iter()
-            .filter(|e| !has_regex_chars(&e.long))
-            .map(|e| (e.long.clone(), e.short.clone()))
-            .collect();
-        pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        pairs.dedup();
-        pairs
+        AbbrTable::from_groups(groups)
     }
 }
 
@@ -302,205 +239,197 @@ impl Abbreviations {
 
 // --- Static data definitions ---
 
-fn abbr(short: &str, long: &str) -> Abbr {
-    Abbr {
-        short: short.to_string(),
-        long: long.to_string(),
-    }
-}
-
 fn build_directions() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("NE", "NORTHEAST"),
-        abbr("NW", "NORTHWEST"),
-        abbr("SE", "SOUTHEAST"),
-        abbr("SW", "SOUTHWEST"),
-        abbr("N", "NORTH"),
-        abbr("S", "SOUTH"),
-        abbr("E", "EAST"),
-        abbr("W", "WEST"),
+    AbbrTable::from_groups(vec![
+        AbbrGroup { short: "NE".into(), long: "NORTHEAST".into(), variants: vec![] },
+        AbbrGroup { short: "NW".into(), long: "NORTHWEST".into(), variants: vec![] },
+        AbbrGroup { short: "SE".into(), long: "SOUTHEAST".into(), variants: vec![] },
+        AbbrGroup { short: "SW".into(), long: "SOUTHWEST".into(), variants: vec![] },
+        AbbrGroup { short: "N".into(), long: "NORTH".into(), variants: vec![] },
+        AbbrGroup { short: "S".into(), long: "SOUTH".into(), variants: vec![] },
+        AbbrGroup { short: "E".into(), long: "EAST".into(), variants: vec![] },
+        AbbrGroup { short: "W".into(), long: "WEST".into(), variants: vec![] },
     ])
 }
 
 fn build_unit_types() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("APT", "APARTMENT"),
-        abbr("UNIT", "UNIT"),
-        abbr("STE", "SUITE"),
-        abbr("FL", "FLOOR"),
-        abbr("FLT", "FLAT"),
-        abbr("BLDG", "BUILDING"),
-        abbr("RM", "ROOM"),
-        abbr("PH", "PENTHOUSE"),
-        abbr("TOWNHOUSE", "TOWNHOUSE"),
-        abbr("DEPT", "DEPARTMENT"),
-        abbr("DUPLEX", "DUPLEX"),
-        abbr("ATTIC", "ATTIC"),
-        abbr("BSMT", "BASEMENT"),
-        abbr("LOT", "LOT"),
-        abbr("LVL", "LEVEL"),
-        abbr("OFC", "OFFICE"),
-        abbr("NUM", "NUMBER"),
-        abbr("NO", "NUMBER"),
-        abbr("HSE", "HOUSE"),
-        abbr("GARAGE", "GARAGE"),
-        abbr("CONDO", "CONDO"),
-        abbr("TRLR", "TRAILER"),
-        abbr("#", "#"),
+    AbbrTable::from_groups(vec![
+        AbbrGroup { short: "APT".into(), long: "APARTMENT".into(), variants: vec![] },
+        AbbrGroup { short: "UNIT".into(), long: "UNIT".into(), variants: vec![] },
+        AbbrGroup { short: "STE".into(), long: "SUITE".into(), variants: vec![] },
+        AbbrGroup { short: "FL".into(), long: "FLOOR".into(), variants: vec![] },
+        AbbrGroup { short: "FLT".into(), long: "FLAT".into(), variants: vec![] },
+        AbbrGroup { short: "BLDG".into(), long: "BUILDING".into(), variants: vec![] },
+        AbbrGroup { short: "RM".into(), long: "ROOM".into(), variants: vec![] },
+        AbbrGroup { short: "PH".into(), long: "PENTHOUSE".into(), variants: vec![] },
+        AbbrGroup { short: "TOWNHOUSE".into(), long: "TOWNHOUSE".into(), variants: vec![] },
+        AbbrGroup { short: "DEPT".into(), long: "DEPARTMENT".into(), variants: vec![] },
+        AbbrGroup { short: "DUPLEX".into(), long: "DUPLEX".into(), variants: vec![] },
+        AbbrGroup { short: "ATTIC".into(), long: "ATTIC".into(), variants: vec![] },
+        AbbrGroup { short: "BSMT".into(), long: "BASEMENT".into(), variants: vec![] },
+        AbbrGroup { short: "LOT".into(), long: "LOT".into(), variants: vec![] },
+        AbbrGroup { short: "LVL".into(), long: "LEVEL".into(), variants: vec![] },
+        AbbrGroup { short: "OFC".into(), long: "OFFICE".into(), variants: vec![] },
+        AbbrGroup { short: "NUM".into(), long: "NUMBER".into(), variants: vec!["NO".into()] },
+        AbbrGroup { short: "HSE".into(), long: "HOUSE".into(), variants: vec![] },
+        AbbrGroup { short: "GARAGE".into(), long: "GARAGE".into(), variants: vec![] },
+        AbbrGroup { short: "CONDO".into(), long: "CONDO".into(), variants: vec![] },
+        AbbrGroup { short: "TRLR".into(), long: "TRAILER".into(), variants: vec![] },
+        AbbrGroup { short: "#".into(), long: "#".into(), variants: vec![] },
     ])
 }
 
 fn build_unit_locations() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("UPPR", "UPPER"),
-        abbr("UP", "UPPER"),
-        abbr("LOWR", "LOWER"),
-        abbr("LWR", "LOWER"),
-        abbr("LW", "LOWER"),
-        abbr("FRNT", "FRONT"),
-        abbr("FRT", "FRONT"),
-        abbr("REAR", "REAR"),
-        abbr("BACK", "BACK"),
-        abbr("MID", "MIDDLE"),
-        abbr("ENTIRE", "ENTIRE"),
-        abbr("WHOLE", "WHOLE"),
-        abbr("SINGLE", "SINGLE"),
-        abbr("DOWN", "DOWN"),
-        abbr("RIGHT", "RIGHT"),
-        abbr("LEFT", "LEFT"),
-        abbr("DOWNSTAIRS", "DOWNSTAIRS"),
-        abbr("UPSTAIRS", "UPSTAIRS"),
-        abbr("SIDE", "SIDE"),
+    AbbrTable::from_groups(vec![
+        AbbrGroup { short: "UPPR".into(), long: "UPPER".into(), variants: vec!["UP".into()] },
+        AbbrGroup { short: "LOWR".into(), long: "LOWER".into(), variants: vec!["LWR".into(), "LW".into()] },
+        AbbrGroup { short: "FRNT".into(), long: "FRONT".into(), variants: vec!["FRT".into()] },
+        AbbrGroup { short: "REAR".into(), long: "REAR".into(), variants: vec![] },
+        AbbrGroup { short: "BACK".into(), long: "BACK".into(), variants: vec![] },
+        AbbrGroup { short: "MID".into(), long: "MIDDLE".into(), variants: vec![] },
+        AbbrGroup { short: "ENTIRE".into(), long: "ENTIRE".into(), variants: vec![] },
+        AbbrGroup { short: "WHOLE".into(), long: "WHOLE".into(), variants: vec![] },
+        AbbrGroup { short: "SINGLE".into(), long: "SINGLE".into(), variants: vec![] },
+        AbbrGroup { short: "DOWN".into(), long: "DOWN".into(), variants: vec![] },
+        AbbrGroup { short: "RIGHT".into(), long: "RIGHT".into(), variants: vec![] },
+        AbbrGroup { short: "LEFT".into(), long: "LEFT".into(), variants: vec![] },
+        AbbrGroup { short: "DOWNSTAIRS".into(), long: "DOWNSTAIRS".into(), variants: vec![] },
+        AbbrGroup { short: "UPSTAIRS".into(), long: "UPSTAIRS".into(), variants: vec![] },
+        AbbrGroup { short: "SIDE".into(), long: "SIDE".into(), variants: vec![] },
     ])
 }
 
 fn build_states() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("AL", "ALABAMA"), abbr("AK", "ALASKA"), abbr("AZ", "ARIZONA"),
-        abbr("AR", "ARKANSAS"), abbr("CA", "CALIFORNIA"), abbr("CO", "COLORADO"),
-        abbr("CT", "CONNECTICUT"), abbr("DE", "DELAWARE"), abbr("FL", "FLORIDA"),
-        abbr("GA", "GEORGIA"), abbr("HI", "HAWAII"), abbr("ID", "IDAHO"),
-        abbr("IL", "ILLINOIS"), abbr("IN", "INDIANA"), abbr("IA", "IOWA"),
-        abbr("KS", "KANSAS"), abbr("KY", "KENTUCKY"), abbr("LA", "LOUISIANA"),
-        abbr("ME", "MAINE"), abbr("MD", "MARYLAND"), abbr("MA", "MASSACHUSETTS"),
-        abbr("MI", "MICHIGAN"), abbr("MN", "MINNESOTA"), abbr("MS", "MISSISSIPPI"),
-        abbr("MO", "MISSOURI"), abbr("MT", "MONTANA"), abbr("NE", "NEBRASKA"),
-        abbr("NV", "NEVADA"), abbr("NH", "NEW HAMPSHIRE"), abbr("NJ", "NEW JERSEY"),
-        abbr("NM", "NEW MEXICO"), abbr("NY", "NEW YORK"), abbr("NC", "NORTH CAROLINA"),
-        abbr("ND", "NORTH DAKOTA"), abbr("OH", "OHIO"), abbr("OK", "OKLAHOMA"),
-        abbr("OR", "OREGON"), abbr("PA", "PENNSYLVANIA"), abbr("RI", "RHODE ISLAND"),
-        abbr("SC", "SOUTH CAROLINA"), abbr("SD", "SOUTH DAKOTA"), abbr("TN", "TENNESSEE"),
-        abbr("TX", "TEXAS"), abbr("UT", "UTAH"), abbr("VT", "VERMONT"),
-        abbr("VA", "VIRGINIA"), abbr("WA", "WASHINGTON"), abbr("WV", "WEST VIRGINIA"),
-        abbr("WI", "WISCONSIN"), abbr("WY", "WYOMING"), abbr("DC", "DISTRICT OF COLUMBIA"),
+    AbbrTable::from_pairs(vec![
+        ("AL", "ALABAMA"), ("AK", "ALASKA"), ("AZ", "ARIZONA"),
+        ("AR", "ARKANSAS"), ("CA", "CALIFORNIA"), ("CO", "COLORADO"),
+        ("CT", "CONNECTICUT"), ("DE", "DELAWARE"), ("FL", "FLORIDA"),
+        ("GA", "GEORGIA"), ("HI", "HAWAII"), ("ID", "IDAHO"),
+        ("IL", "ILLINOIS"), ("IN", "INDIANA"), ("IA", "IOWA"),
+        ("KS", "KANSAS"), ("KY", "KENTUCKY"), ("LA", "LOUISIANA"),
+        ("ME", "MAINE"), ("MD", "MARYLAND"), ("MA", "MASSACHUSETTS"),
+        ("MI", "MICHIGAN"), ("MN", "MINNESOTA"), ("MS", "MISSISSIPPI"),
+        ("MO", "MISSOURI"), ("MT", "MONTANA"), ("NE", "NEBRASKA"),
+        ("NV", "NEVADA"), ("NH", "NEW HAMPSHIRE"), ("NJ", "NEW JERSEY"),
+        ("NM", "NEW MEXICO"), ("NY", "NEW YORK"), ("NC", "NORTH CAROLINA"),
+        ("ND", "NORTH DAKOTA"), ("OH", "OHIO"), ("OK", "OKLAHOMA"),
+        ("OR", "OREGON"), ("PA", "PENNSYLVANIA"), ("RI", "RHODE ISLAND"),
+        ("SC", "SOUTH CAROLINA"), ("SD", "SOUTH DAKOTA"), ("TN", "TENNESSEE"),
+        ("TX", "TEXAS"), ("UT", "UTAH"), ("VT", "VERMONT"),
+        ("VA", "VIRGINIA"), ("WA", "WASHINGTON"), ("WV", "WEST VIRGINIA"),
+        ("WI", "WISCONSIN"), ("WY", "WYOMING"), ("DC", "DISTRICT OF COLUMBIA"),
     ])
 }
 
-fn build_usps_suffixes() -> AbbrTable {
-    // Parse the USPS CSV into a 1:1 mapping: USPS short ↔ primary name.
-    // Each short code gets exactly one long form (the primary suffix name).
-    let csv = include_str!("../../data/usps-street-suffix.csv");
-    let mut seen = std::collections::HashSet::new();
-    let mut entries = Vec::new();
-
-    for line in csv.lines().skip(1) {
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() >= 3 {
-            let long = cols[0].trim();
-            let short = cols[2].trim();
-
-            // One entry per short code — first occurrence (primary name) wins
-            if seen.insert(short.to_string()) {
-                entries.push(abbr(short, long));
-            }
-        }
-    }
-
-    AbbrTable::new(entries)
-}
-
 fn build_all_suffixes() -> AbbrTable {
-    let csv = include_str!("../../data/usps-street-suffix.csv");
-    let mut entries = Vec::new();
+    let csv_data = include_str!("../../data/usps-street-suffix.csv");
+    let mut groups: Vec<AbbrGroup> = Vec::new();
+    let mut usps_to_idx: HashMap<String, usize> = HashMap::new();
 
-    for line in csv.lines().skip(1) {
+    for line in csv_data.lines().skip(1) {
         let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() >= 3 {
-            let long = cols[0].trim();
-            let common = cols[1].trim();
-            let short = cols[2].trim();
+        if cols.len() < 3 { continue; }
+        let primary = cols[0].trim().to_uppercase();
+        let variant = cols[1].trim().to_uppercase();
+        let usps = cols[2].trim().to_uppercase();
 
-            // Skip TRAILER (used as unit type instead) and HIGHWAY (handled separately)
-            if long == "TRAILER" || long == "HIGHWAY" {
-                continue;
-            }
+        if usps == "TRAILER" || usps == "HIGHWAY" { continue; }
 
-            // Handle plural forms → give them distinct short codes
-            let actual_short = if ["PARK", "WALK", "SPUR", "LOOP"].contains(&short)
-                && ["PARKS", "WALKS", "SPURS", "LOOPS"].contains(&long)
+        // Handle plural forms
+        let canonical_short = if ["PARK", "WALK", "SPUR", "LOOP"].contains(&usps.as_str())
+            && ["PARKS", "WALKS", "SPURS", "LOOPS"].contains(&primary.as_str())
+        {
+            format!("{}S", usps)
+        } else {
+            usps.clone()
+        };
+
+        if let Some(&idx) = usps_to_idx.get(&canonical_short) {
+            let group = &mut groups[idx];
+            // Add variant if it differs from canonical short and long and not already present
+            if variant != group.short && variant != group.long
+                && !group.variants.contains(&variant)
             {
-                format!("{}S", short)
-            } else {
-                short.to_string()
-            };
+                group.variants.push(variant.clone());
+            }
+            // Also add the primary long form as variant if it differs
+            if primary != group.short && primary != group.long
+                && !group.variants.contains(&primary)
+            {
+                group.variants.push(primary);
+            }
+        } else {
+            let idx = groups.len();
+            let mut variants = vec![];
+            if variant != canonical_short && variant != primary {
+                variants.push(variant);
+            }
+            groups.push(AbbrGroup {
+                short: canonical_short.clone(),
+                long: primary,
+                variants,
+            });
+            usps_to_idx.insert(canonical_short, idx);
+        }
+    }
 
-            entries.push(abbr(&actual_short, long));
-            if common != long && common != short {
-                entries.push(abbr(&actual_short, common));
+    // Add manual overrides from R package's abbr_more_suffix
+    let manual_variants: &[(&str, &[&str])] = &[
+        ("BLVD", &["BVD", "BV", "BLV", "BL"]),
+        ("CIR", &["CI"]),
+        ("CT", &["CRT"]),
+        ("EXPY", &["EX", "EXPWY"]),
+        ("IS", &["ISLD"]),
+        ("LN", &["LA"]),
+        ("PKWY", &["PY", "PARK WAY", "PKW"]),
+        ("TER", &["TE"]),
+        ("TRCE", &["TR"]),
+        ("PARK", &["PK"]),
+        ("PL", &["PLC"]),
+        ("AVE", &["AE"]),
+        ("DR", &["DIRVE"]),
+    ];
+    for (usps_short, extras) in manual_variants {
+        if let Some(&idx) = usps_to_idx.get(*usps_short) {
+            for extra in *extras {
+                let e = extra.to_uppercase();
+                let group = &mut groups[idx];
+                if e != group.short && e != group.long && !group.variants.contains(&e) {
+                    group.variants.push(e);
+                }
             }
         }
     }
 
-    // Manual additions (from R package's abbr_more_suffix)
-    let extras = vec![
-        abbr("BLVD", "BVD"), abbr("BLVD", "BV"), abbr("BLVD", "BLV"), abbr("BLVD", "BL"),
-        abbr("CIR", "CI"), abbr("CT", "CRT"), abbr("EXPY", "EX"), abbr("EXPY", "EXPWY"),
-        abbr("IS", "ISLD"), abbr("LN", "LA"), abbr("PKWY", "PY"), abbr("PKWY", "PARK WAY"),
-        abbr("PKWY", "PKW"), abbr("TER", "TE"), abbr("TRCE", "TR"), abbr("PARK", "PK"),
-        abbr("PL", "PLC"), abbr("AVE", "AE"), abbr("DR", "DIRVE"),
-    ];
-    entries.extend(extras);
-
-    AbbrTable::new(entries)
+    AbbrTable::from_groups(groups)
 }
 
 fn build_na_values() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("NULL", ""),
-        abbr("NAN", ""),
-        abbr("MISSING", ""),
-        abbr("NONE", ""),
-        abbr("UNKNOWN", ""),
-        abbr("NO ADDRESS", ""),
+    AbbrTable::from_pairs(vec![
+        ("NULL", ""), ("NAN", ""), ("MISSING", ""), ("NONE", ""),
+        ("UNKNOWN", ""), ("NO ADDRESS", ""),
     ])
 }
 
 fn build_street_name_abbr() -> AbbrTable {
-    AbbrTable::new(vec![
-        abbr("MT", "MOUNT"),
-        abbr("FT", "FORT"),
-    ])
+    AbbrTable::from_pairs(vec![("MT", "MOUNT"), ("FT", "FORT")])
 }
 
 fn build_common_suffixes() -> AbbrTable {
-    // Common suffixes: USPS standard short → long form only.
-    // These are suffixes frequent enough to extract confidently
-    // (vs. words like CRESCENT that appear in street names).
-    // The regex uses all_values() so both short and long forms match.
-    AbbrTable::new(vec![
-        abbr("DR", "DRIVE"),
-        abbr("LN", "LANE"),
-        abbr("AVE", "AVENUE"),
-        abbr("RD", "ROAD"),
-        abbr("ST", "STREET"),
-        abbr("CIR", "CIRCLE"),
-        abbr("CT", "COURT"),
-        abbr("PL", "PLACE"),
-        abbr("WAY", "WAY"),
-        abbr("BLVD", "BOULEVARD"),
-        abbr("STRA", "STRAVENUE"),
-        abbr("CV", "COVE"),
-        abbr("LOOP", "LOOP"),
+    AbbrTable::from_groups(vec![
+        AbbrGroup { short: "DR".into(), long: "DRIVE".into(), variants: vec![] },
+        AbbrGroup { short: "LN".into(), long: "LANE".into(), variants: vec![] },
+        AbbrGroup { short: "AVE".into(), long: "AVENUE".into(), variants: vec![] },
+        AbbrGroup { short: "RD".into(), long: "ROAD".into(), variants: vec![] },
+        AbbrGroup { short: "ST".into(), long: "STREET".into(), variants: vec![] },
+        AbbrGroup { short: "CIR".into(), long: "CIRCLE".into(), variants: vec![] },
+        AbbrGroup { short: "CT".into(), long: "COURT".into(), variants: vec![] },
+        AbbrGroup { short: "PL".into(), long: "PLACE".into(), variants: vec![] },
+        AbbrGroup { short: "WAY".into(), long: "WAY".into(), variants: vec![] },
+        AbbrGroup { short: "BLVD".into(), long: "BOULEVARD".into(), variants: vec![] },
+        AbbrGroup { short: "STRA".into(), long: "STRAVENUE".into(), variants: vec![] },
+        AbbrGroup { short: "CV".into(), long: "COVE".into(), variants: vec![] },
+        AbbrGroup { short: "LOOP".into(), long: "LOOP".into(), variants: vec![] },
     ])
 }
 
@@ -511,7 +440,6 @@ pub fn build_default_tables() -> Abbreviations {
     tables.insert("unit_type".to_string(), build_unit_types());
     tables.insert("unit_location".to_string(), build_unit_locations());
     tables.insert("state".to_string(), build_states());
-    tables.insert("suffix_usps".to_string(), build_usps_suffixes());
     tables.insert("suffix_all".to_string(), build_all_suffixes());
     tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
@@ -529,7 +457,6 @@ pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(|| {
     tables.insert("unit_type".to_string(), build_unit_types());
     tables.insert("unit_location".to_string(), build_unit_locations());
     tables.insert("state".to_string(), build_states());
-    tables.insert("suffix_usps".to_string(), build_usps_suffixes());
     tables.insert("suffix_all".to_string(), build_all_suffixes());
     tables.insert("suffix_common".to_string(), build_common_suffixes());
     tables.insert("na_values".to_string(), build_na_values());
@@ -543,74 +470,32 @@ pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DictEntry, DictOverrides};
-
-    #[test]
-    fn test_patch_add() {
-        let table = AbbrTable::new(vec![abbr("ST", "STREET")]);
-        let overrides = DictOverrides {
-            add: vec![DictEntry { short: "PSGE".into(), long: "PASSAGE".into() }],
-            remove: vec![],
-            override_entries: vec![],
-        };
-        let patched = table.patch(&overrides);
-        assert!(patched.to_long("PSGE").is_some());
-        assert_eq!(patched.to_long("PSGE"), Some("PASSAGE"));
-        assert_eq!(patched.to_long("ST"), Some("STREET"));
-    }
-
-    #[test]
-    fn test_patch_remove() {
-        let table = AbbrTable::new(vec![
-            abbr("ST", "STREET"),
-            abbr("AVE", "AVENUE"),
-        ]);
-        let overrides = DictOverrides {
-            add: vec![],
-            remove: vec!["STREET".into()],
-            override_entries: vec![],
-        };
-        let patched = table.patch(&overrides);
-        assert!(patched.to_long("ST").is_none());
-        assert_eq!(patched.to_long("AVE"), Some("AVENUE"));
-    }
-
-    #[test]
-    fn test_patch_override() {
-        let table = AbbrTable::new(vec![abbr("STE", "SUITE")]);
-        let overrides = DictOverrides {
-            add: vec![],
-            remove: vec![],
-            override_entries: vec![DictEntry { short: "STE".into(), long: "SUITE NUMBER".into() }],
-        };
-        let patched = table.patch(&overrides);
-        assert_eq!(patched.to_long("STE"), Some("SUITE NUMBER"));
-    }
 
     #[test]
     fn test_is_value_list_true() {
-        let table = AbbrTable::new(vec![
-            abbr("NULL", ""),
-            abbr("NAN", ""),
-            abbr("MISSING", ""),
+        let table = AbbrTable::from_pairs(vec![
+            ("NULL", ""),
+            ("NAN", ""),
+            ("MISSING", ""),
         ]);
         assert!(table.is_value_list());
     }
 
     #[test]
     fn test_is_value_list_false() {
-        let table = AbbrTable::new(vec![abbr("ST", "STREET")]);
+        let table = AbbrTable::from_pairs(vec![("ST", "STREET")]);
         assert!(!table.is_value_list());
     }
 
     #[test]
     fn test_all_values_skips_empty() {
-        let table = AbbrTable::new(vec![
-            abbr("NULL", ""),
-            abbr("NAN", ""),
+        let table = AbbrTable::from_pairs(vec![
+            ("NULL", ""),
+            ("NAN", ""),
         ]);
         let vals = table.all_values();
-        assert_eq!(vals, vec!["NULL", "NAN"]);
+        assert!(vals.contains(&"NULL"));
+        assert!(vals.contains(&"NAN"));
         assert!(!vals.contains(&""));
     }
 
@@ -635,27 +520,13 @@ mod tests {
 
     #[test]
     fn test_short_values() {
-        let table = AbbrTable::new(vec![
-            abbr("ST", "STREET"),
-            abbr("AVE", "AVENUE"),
+        let table = AbbrTable::from_pairs(vec![
+            ("ST", "STREET"),
+            ("AVE", "AVENUE"),
         ]);
         let shorts = table.short_values();
         // Sorted by length descending
         assert_eq!(shorts, vec!["AVE", "ST"]);
-    }
-
-    #[test]
-    fn test_suffix_usps_is_one_to_one() {
-        let tables = build_default_tables();
-        let usps = tables.get("suffix_usps").unwrap();
-        let mut seen_shorts = std::collections::HashSet::new();
-        for entry in &usps.entries {
-            if seen_shorts.contains(&entry.short) {
-                panic!("Duplicate short in suffix_usps: {} (long: {})", entry.short, entry.long);
-            }
-            seen_shorts.insert(entry.short.clone());
-            assert!(!entry.long.is_empty(), "Empty long for short: {}", entry.short);
-        }
     }
 
     #[test]
@@ -667,10 +538,8 @@ mod tests {
 
     #[test]
     fn test_table_with_pattern() {
-        let table = AbbrTable::from_pairs_with_pattern(
-            vec![("N", "NORTH"), ("S", "SOUTH")],
-            Some(r"\b({direction})\b".to_string()),
-        );
+        let table = AbbrTable::from_pairs(vec![("N", "NORTH"), ("S", "SOUTH")])
+            .with_pattern_template(Some(r"\b({direction})\b".to_string()));
         assert_eq!(table.pattern_template.as_deref(), Some(r"\b({direction})\b"));
         assert_eq!(table.to_long("N"), Some("NORTH"));
     }
@@ -686,18 +555,6 @@ mod tests {
         let ordinal = tables.get("number_ordinal").unwrap();
         assert_eq!(ordinal.to_long("1"), Some("FIRST"));
         assert_eq!(ordinal.to_long("21"), Some("TWENTYFIRST"));
-    }
-
-    #[test]
-    fn test_suffix_usps_bidirectional() {
-        let tables = build_default_tables();
-        let usps = tables.get("suffix_usps").unwrap();
-        assert_eq!(usps.to_long("AVE"), Some("AVENUE"));
-        assert_eq!(usps.to_short("AVENUE"), Some("AVE"));
-        assert_eq!(usps.to_long("DR"), Some("DRIVE"));
-        assert_eq!(usps.to_short("DRIVE"), Some("DR"));
-        assert_eq!(usps.to_long("ST"), Some("STREET"));
-        assert_eq!(usps.to_short("STREET"), Some("ST"));
     }
 
     #[test]

@@ -247,18 +247,18 @@ impl App {
                 let overrides = config.dictionaries.get(name);
 
                 let mut entries: Vec<DictEntryState> = table
-                    .entries
+                    .groups
                     .iter()
-                    .map(|e| {
+                    .map(|g| {
                         let mut status = EntryStatus::Default;
-                        let mut long = e.long.clone();
+                        let mut long = g.long.clone();
                         let mut original_long = None;
 
                         if let Some(ov) = overrides {
                             // Check if removed
                             let is_removed = ov.remove.iter().any(|r| {
                                 let upper = r.to_uppercase();
-                                e.short == upper || e.long == upper
+                                g.short == upper || g.long == upper
                             });
                             if is_removed {
                                 status = EntryStatus::Removed;
@@ -266,8 +266,8 @@ impl App {
 
                             // Check if overridden
                             for o in &ov.override_entries {
-                                if o.short.to_uppercase() == e.short {
-                                    original_long = Some(e.long.clone());
+                                if o.short.to_uppercase() == g.short {
+                                    original_long = Some(g.long.clone());
                                     long = o.long.to_uppercase();
                                     status = EntryStatus::Overridden;
                                 }
@@ -275,7 +275,7 @@ impl App {
                         }
 
                         DictEntryState {
-                            short: e.short.clone(),
+                            short: g.short.clone(),
                             long,
                             status,
                             original_long,

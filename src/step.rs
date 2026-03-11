@@ -730,7 +730,7 @@ table = "street_name_abbr"
             target: Some("suffix".to_string()),
             skip_if_filled: None,
             matching_table: Some("suffix_all".to_string()),
-            format_table: Some("suffix_usps".to_string()),
+            format_table: Some("suffix_all".to_string()),
             mode: None,
             targets: None,
         };
@@ -765,7 +765,7 @@ table = "street_name_abbr"
         use crate::tables::abbreviations::build_default_tables;
         let abbr = build_default_tables();
         let expanded = expand_template("{state}", &abbr);
-        assert!(expanded.starts_with(r"\b("));
+        assert!(expanded.starts_with(r"(?:"));
     }
 
     #[test]
