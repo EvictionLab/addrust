@@ -99,8 +99,6 @@ pub struct StepsConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub pattern_overrides: HashMap<String, String>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub step_overrides: HashMap<String, StepOverride>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub step_order: Vec<String>,
@@ -111,7 +109,6 @@ pub struct StepsConfig {
 impl StepsConfig {
     pub fn is_empty(&self) -> bool {
         self.disabled.is_empty()
-            && self.pattern_overrides.is_empty()
             && self.step_overrides.is_empty()
             && self.step_order.is_empty()
             && self.custom_steps.is_empty()
@@ -196,7 +193,7 @@ mod tests {
         let toml_str = config.to_toml();
         assert_eq!(toml_str.trim(), "");
         assert!(!toml_str.contains("[output]"));
-        assert!(!toml_str.contains("pattern_overrides"));
+        assert!(!toml_str.contains("step_overrides"));
     }
 
     #[test]
@@ -209,9 +206,12 @@ mod tests {
     fn test_roundtrip_full_config() {
         let mut config = Config::default();
         config.steps.disabled = vec!["po_box".to_string()];
-        config.steps.pattern_overrides.insert(
+        config.steps.step_overrides.insert(
             "suffix_common".to_string(),
-            r"(?<!^)\b({suffix_common})\s*$".to_string(),
+            StepOverride {
+                pattern: Some(r"(?<!^)\b({suffix_common})\s*$".to_string()),
+                ..Default::default()
+            },
         );
         config.dictionaries.insert("unit_type".to_string(), DictOverrides {
             add: vec![DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() }],
@@ -223,7 +223,7 @@ mod tests {
 
         let toml_str = config.to_toml();
         assert!(toml_str.contains("[steps]"));
-        assert!(toml_str.contains("[steps.pattern_overrides]"));
+        assert!(toml_str.contains("[steps.step_overrides.suffix_common]"));
         assert!(toml_str.contains("[output]"));
         // Non-default output fields serialized, defaults omitted
         assert!(toml_str.contains("suffix"));
@@ -231,7 +231,7 @@ mod tests {
 
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.steps.disabled, vec!["po_box"]);
-        assert!(parsed.steps.pattern_overrides.contains_key("suffix_common"));
+        assert!(parsed.steps.step_overrides.contains_key("suffix_common"));
         assert_eq!(parsed.output.suffix, OutputFormat::Short);
         assert_eq!(parsed.output.direction, OutputFormat::Long);
         assert_eq!(parsed.output.unit_type, OutputFormat::Long); // default preserved

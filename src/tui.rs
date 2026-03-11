@@ -11,7 +11,6 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
 use crate::pattern::PatternSegment;
-use crate::pipeline::Pipeline;
 use crate::tables::abbreviations::build_default_tables;
 
 /// Which top-level tab is active.
@@ -246,9 +245,6 @@ impl App {
         // Build current defs (with overrides applied)
         let mut current_defs: Vec<crate::step::StepDef> = default_defs.step.clone();
         for def in &mut current_defs {
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
-            }
             if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
                 step_override.apply_to(def);
             }
@@ -257,9 +253,6 @@ impl App {
         // Append custom steps
         for custom_def in &config.steps.custom_steps {
             let mut def = custom_def.clone();
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
-            }
             if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
                 step_override.apply_to(&mut def);
             }
@@ -523,7 +516,6 @@ impl App {
 
         config.steps = crate::config::StepsConfig {
             disabled,
-            pattern_overrides: HashMap::new(), // no longer written; read-only for backward compat
             step_overrides,
             step_order: if emit_order { self.steps.iter().map(|s| s.label().to_string()).collect() } else { Vec::new() },
             custom_steps,

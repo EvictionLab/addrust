@@ -43,14 +43,7 @@ impl Pipeline {
         let mut defs: StepsDef = toml::from_str(toml_str)
             .expect("Failed to parse default steps.toml");
 
-        // Apply pattern overrides from config
-        for def in &mut defs.step {
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
-            }
-        }
-
-        // Apply step_overrides (takes precedence over pattern_overrides)
+        // Apply step_overrides from config
         for def in &mut defs.step {
             if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
                 step_override.apply_to(def);
@@ -59,12 +52,9 @@ impl Pipeline {
 
         let mut steps = compile_steps(&defs.step, &tables);
 
-        // Compile and append custom steps (with pattern overrides and step_overrides applied)
+        // Compile and append custom steps (with step_overrides applied)
         for custom_def in &config.steps.custom_steps {
             let mut def = custom_def.clone();
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
-            }
             if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
                 step_override.apply_to(&mut def);
             }
@@ -226,8 +216,8 @@ disabled = ["suffix_common", "suffix_all"]
     #[test]
     fn test_config_pattern_override() {
         let toml_str = r#"
-[steps.pattern_overrides]
-unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
+[steps.step_overrides.unit_type_value]
+pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
@@ -352,8 +342,8 @@ step_order = ["suffix_common", "na_check"]
 disabled = ["na_check"]
 step_order = ["po_box", "na_check", "city_state_zip"]
 
-[steps.pattern_overrides]
-po_box = '(?i)P\.?\s*O\.?\s*BOX\s+(\w+)'
+[steps.step_overrides.po_box]
+pattern = '(?i)P\.?\s*O\.?\s*BOX\s+(\w+)'
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);

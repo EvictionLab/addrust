@@ -1,4 +1,4 @@
-use addrust::config::{Config, StepOverride};
+use addrust::config::Config;
 use addrust::pipeline::Pipeline;
 
 #[test]
@@ -491,21 +491,6 @@ pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
 }
 
 #[test]
-fn test_step_overrides_backward_compat_with_pattern_overrides() {
-    // pattern_overrides still works
-    let config: Config = toml::from_str(
-        r#"
-[steps.pattern_overrides]
-po_box = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
-"#,
-    )
-    .unwrap();
-    let p = Pipeline::from_config(&config);
-    let addr = p.parse("PO BOX 123-4");
-    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
-}
-
-#[test]
 fn test_prepare_steps_in_pipeline() {
     let config = Config::default();
     let p = Pipeline::from_config(&config);
@@ -515,21 +500,4 @@ fn test_prepare_steps_in_pipeline() {
     assert_eq!(summaries[0].step_type, "rewrite");
 }
 
-#[test]
-fn test_step_overrides_override_pattern_overrides() {
-    // step_overrides takes precedence over pattern_overrides
-    let config: Config = toml::from_str(
-        r#"
-[steps.pattern_overrides]
-po_box = 'OLD_PATTERN'
-
-[steps.step_overrides.po_box]
-pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
-"#,
-    )
-    .unwrap();
-    let p = Pipeline::from_config(&config);
-    let addr = p.parse("PO BOX 123-4");
-    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
-}
 
