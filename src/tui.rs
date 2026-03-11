@@ -26,16 +26,16 @@ enum Tab {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum InputMode {
     Normal,
-    /// Adding a new entry: typing the short form.
-    AddShort(String),
-    /// Adding a new entry: short form done, typing the long form.
-    AddLong(String, String),
-    /// Editing an existing entry's long form: (index, current_text).
-    EditLong(usize, String),
+    /// Adding a new entry: typing the short form (text, cursor).
+    AddShort(String, usize),
+    /// Adding a new entry: short form done, typing the long form (short, long, cursor).
+    AddLong(String, String, usize),
+    /// Editing an existing entry's long form: (index, text, cursor).
+    EditLong(usize, String, usize),
     /// Viewing/editing a group's variants: (group_index, variant_cursor).
     EditVariants(usize, usize),
-    /// Adding a new variant to a group: (group_index, text).
-    AddVariant(usize, String),
+    /// Adding a new variant to a group: (group_index, text, cursor).
+    AddVariant(usize, String, usize),
     /// Editing a step's pattern template: (text, cursor position, optional validation error).
     EditPattern(String, usize, Option<String>),
     /// Add-step wizard: (wizard state, insertion index).
@@ -940,7 +940,7 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
         }
         // Add new entry
         KeyCode::Char('a') => {
-            app.input_mode = InputMode::AddShort(String::new());
+            app.input_mode = InputMode::AddShort(String::new(), 0);
         }
         // Drill into group to view/edit variants
         KeyCode::Enter => {
@@ -956,7 +956,8 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
-                    app.input_mode = InputMode::EditLong(i, entry.long.clone());
+                    let cursor = entry.long.len();
+                    app.input_mode = InputMode::EditLong(i, entry.long.clone(), cursor);
                 }
             }
         }
@@ -964,12 +965,82 @@ fn handle_dict_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Result of a text editing keystroke.
+enum TextEditResult {
+    /// Text was modified or cursor moved — continue editing.
+    Continue,
+    /// Enter was pressed — return the final text.
+    Submit(String),
+    /// Esc was pressed — cancel.
+    Cancel,
+}
+
+/// Handle a keystroke for cursor-aware text editing.
+/// Returns the action to take. Mutates text and cursor in place for Continue.
+fn text_edit(text: &mut String, cursor: &mut usize, code: KeyCode) -> TextEditResult {
+    match code {
+        KeyCode::Enter => TextEditResult::Submit(text.clone()),
+        KeyCode::Esc => TextEditResult::Cancel,
+        KeyCode::Left => {
+            if *cursor > 0 { *cursor -= 1; }
+            TextEditResult::Continue
+        }
+        KeyCode::Right => {
+            if *cursor < text.len() { *cursor += 1; }
+            TextEditResult::Continue
+        }
+        KeyCode::Home => {
+            *cursor = 0;
+            TextEditResult::Continue
+        }
+        KeyCode::End => {
+            *cursor = text.len();
+            TextEditResult::Continue
+        }
+        KeyCode::Char(c) => {
+            text.insert(*cursor, c);
+            *cursor += 1;
+            TextEditResult::Continue
+        }
+        KeyCode::Backspace => {
+            if *cursor > 0 {
+                *cursor -= 1;
+                text.remove(*cursor);
+            }
+            TextEditResult::Continue
+        }
+        KeyCode::Delete => {
+            if *cursor < text.len() {
+                text.remove(*cursor);
+            }
+            TextEditResult::Continue
+        }
+        _ => TextEditResult::Continue,
+    }
+}
+
+/// Render text with a cursor indicator at the given position.
+fn render_text_with_cursor(text: &str, cursor: usize) -> String {
+    let mut display = String::with_capacity(text.len() + 1);
+    for (i, c) in text.chars().enumerate() {
+        if i == cursor {
+            // Use combining underline to show cursor position
+            display.push('|');
+        }
+        display.push(c);
+    }
+    if cursor >= text.len() {
+        display.push('_');
+    }
+    display
+}
+
 fn handle_input_mode(app: &mut App, code: KeyCode) {
     match &mut app.input_mode {
-        InputMode::AddShort(short) => match code {
-            KeyCode::Enter => {
-                if !short.is_empty() {
-                    let s = short.to_uppercase();
+        InputMode::AddShort(short, cursor) => {
+            match text_edit(short, cursor, code) {
+                TextEditResult::Submit(s) if !s.is_empty() => {
+                    let s = s.to_uppercase();
                     let is_vl = {
                         let tables = build_default_tables();
                         tables
@@ -993,76 +1064,58 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                         app.dirty = true;
                         app.input_mode = InputMode::Normal;
                     } else {
-                        app.input_mode = InputMode::AddLong(s, String::new());
+                        app.input_mode = InputMode::AddLong(s, String::new(), 0);
                     }
                 }
+                TextEditResult::Submit(_) => {} // empty — ignore
+                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
+                TextEditResult::Continue => {}
             }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
+        }
+        InputMode::AddLong(short, long, cursor) => {
+            let short_snapshot = short.clone();
+            match text_edit(long, cursor, code) {
+                TextEditResult::Submit(l) => {
+                    if !l.is_empty() {
+                        let s = short_snapshot.to_uppercase();
+                        let l = l.to_uppercase();
+                        let new_entry = DictGroupState {
+                            short: s.clone(),
+                            long: l.clone(),
+                            variants: Vec::new(),
+                            status: GroupStatus::Added,
+                            original_short: s,
+                            original_long: l,
+                            original_variants: Vec::new(),
+                        };
+                        app.current_dict_entries_mut().push(new_entry);
+                        let len = app.current_dict_entries().len();
+                        app.dict_list_state.select(Some(len - 1));
+                        app.dirty = true;
+                    }
+                    app.input_mode = InputMode::Normal;
+                }
+                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
+                TextEditResult::Continue => {}
             }
-            KeyCode::Char(c) => {
-                short.push(c);
-            }
-            KeyCode::Backspace => {
-                short.pop();
-            }
-            _ => {}
-        },
-        InputMode::AddLong(short, long) => match code {
-            KeyCode::Enter => {
-                if !long.is_empty() {
-                    let s = short.to_uppercase();
-                    let l = long.to_uppercase();
-                    let new_entry = DictGroupState {
-                        short: s.clone(),
-                        long: l.clone(),
-                        variants: Vec::new(),
-                        status: GroupStatus::Added,
-                        original_short: s,
-                        original_long: l,
-                        original_variants: Vec::new(),
-                    };
-                    app.current_dict_entries_mut().push(new_entry);
-                    let len = app.current_dict_entries().len();
-                    app.dict_list_state.select(Some(len - 1));
+        }
+        InputMode::EditLong(idx, text, cursor) => {
+            let idx_val = *idx;
+            match text_edit(text, cursor, code) {
+                TextEditResult::Submit(new_long) => {
+                    let new_long = new_long.to_uppercase();
+                    let entry = &mut app.current_dict_entries_mut()[idx_val];
+                    if entry.status == GroupStatus::Default {
+                        entry.status = GroupStatus::Modified;
+                    }
+                    entry.long = new_long;
                     app.dirty = true;
+                    app.input_mode = InputMode::Normal;
                 }
-                app.input_mode = InputMode::Normal;
+                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
+                TextEditResult::Continue => {}
             }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
-            }
-            KeyCode::Char(c) => {
-                long.push(c);
-            }
-            KeyCode::Backspace => {
-                long.pop();
-            }
-            _ => {}
-        },
-        InputMode::EditLong(idx, text) => match code {
-            KeyCode::Enter => {
-                let idx = *idx;
-                let new_long = text.to_uppercase();
-                let entry = &mut app.current_dict_entries_mut()[idx];
-                if entry.status == GroupStatus::Default {
-                    entry.status = GroupStatus::Modified;
-                }
-                entry.long = new_long;
-                app.dirty = true;
-                app.input_mode = InputMode::Normal;
-            }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
-            }
-            KeyCode::Char(c) => {
-                text.push(c);
-            }
-            KeyCode::Backspace => {
-                text.pop();
-            }
-            _ => {}
-        },
+        }
         InputMode::EditVariants(group_idx, cursor) => {
             let group_idx = *group_idx;
             let cursor = *cursor;
@@ -1086,7 +1139,7 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                     }
                 }
                 KeyCode::Char('a') => {
-                    app.input_mode = InputMode::AddVariant(group_idx, String::new());
+                    app.input_mode = InputMode::AddVariant(group_idx, String::new(), 0);
                 }
                 KeyCode::Char('d') | KeyCode::Delete => {
                     let entry = &mut app.current_dict_entries_mut()[group_idx];
@@ -1104,13 +1157,17 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                 _ => {}
             }
         }
-        InputMode::AddVariant(group_idx, text) => {
-            let group_idx = *group_idx;
-            match code {
-                KeyCode::Enter => {
-                    if !text.is_empty() {
-                        let v = text.to_uppercase();
-                        let entry = &mut app.current_dict_entries_mut()[group_idx];
+        InputMode::AddVariant(group_idx, text, cursor) => {
+            let gidx = *group_idx;
+            let back_to_variants = |app: &mut App, gidx: usize| {
+                let len = app.current_dict_entries()[gidx].variants.len();
+                app.input_mode = InputMode::EditVariants(gidx, if len > 0 { len - 1 } else { 0 });
+            };
+            match text_edit(text, cursor, code) {
+                TextEditResult::Submit(v) => {
+                    if !v.is_empty() {
+                        let v = v.to_uppercase();
+                        let entry = &mut app.current_dict_entries_mut()[gidx];
                         if !entry.variants.contains(&v) {
                             entry.variants.push(v);
                             if entry.status == GroupStatus::Default {
@@ -1119,90 +1176,38 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                             app.dirty = true;
                         }
                     }
-                    let len = app.current_dict_entries()[group_idx].variants.len();
-                    app.input_mode = InputMode::EditVariants(
-                        group_idx,
-                        if len > 0 { len - 1 } else { 0 },
-                    );
+                    back_to_variants(app, gidx);
                 }
-                KeyCode::Esc => {
-                    let len = app.current_dict_entries()[group_idx].variants.len();
-                    app.input_mode = InputMode::EditVariants(
-                        group_idx,
-                        if len > 0 { len - 1 } else { 0 },
-                    );
-                }
-                KeyCode::Char(c) => {
-                    text.push(c);
-                }
-                KeyCode::Backspace => {
-                    text.pop();
-                }
-                _ => {}
+                TextEditResult::Cancel => { back_to_variants(app, gidx); }
+                TextEditResult::Continue => {}
             }
         }
-        InputMode::EditPattern(text, cursor, error) => match code {
-            KeyCode::Enter => {
-                // Validate: expand table placeholders and try to compile
-                match validate_pattern_template(text) {
-                    Ok(()) => {
-                        let new_template = text.clone();
-                        if let Some(step_idx) = app.step_detail_index {
-                            app.steps[step_idx].pattern_template = new_template;
-                            // Re-parse segments for the detail view
-                            app.step_detail_segments = crate::pattern::parse_pattern(
-                                &app.steps[step_idx].pattern_template,
-                            );
-                            app.step_detail_selected = 0;
-                            app.step_detail_alt_selected = None;
-                            app.dirty = true;
+        InputMode::EditPattern(text, cursor, error) => {
+            match text_edit(text, cursor, code) {
+                TextEditResult::Submit(_) => {
+                    match validate_pattern_template(text) {
+                        Ok(()) => {
+                            let new_template = text.clone();
+                            if let Some(step_idx) = app.step_detail_index {
+                                app.steps[step_idx].pattern_template = new_template;
+                                app.step_detail_segments = crate::pattern::parse_pattern(
+                                    &app.steps[step_idx].pattern_template,
+                                );
+                                app.step_detail_selected = 0;
+                                app.step_detail_alt_selected = None;
+                                app.dirty = true;
+                            }
+                            app.input_mode = InputMode::Normal;
                         }
-                        app.input_mode = InputMode::Normal;
+                        Err(msg) => {
+                            *error = Some(msg);
+                        }
                     }
-                    Err(msg) => {
-                        *error = Some(msg);
-                    }
                 }
+                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
+                TextEditResult::Continue => { *error = None; }
             }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
-            }
-            KeyCode::Left => {
-                if *cursor > 0 {
-                    *cursor -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if *cursor < text.len() {
-                    *cursor += 1;
-                }
-            }
-            KeyCode::Home => {
-                *cursor = 0;
-            }
-            KeyCode::End => {
-                *cursor = text.len();
-            }
-            KeyCode::Char(c) => {
-                *error = None;
-                text.insert(*cursor, c);
-                *cursor += 1;
-            }
-            KeyCode::Backspace => {
-                *error = None;
-                if *cursor > 0 {
-                    *cursor -= 1;
-                    text.remove(*cursor);
-                }
-            }
-            KeyCode::Delete => {
-                *error = None;
-                if *cursor < text.len() {
-                    text.remove(*cursor);
-                }
-            }
-            _ => {}
-        },
+        }
         InputMode::Normal | InputMode::AddStep(_, _) => unreachable!(),
     }
 }
@@ -1693,27 +1698,27 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Input mode overlay
     match &app.input_mode {
         InputMode::Normal => {}
-        InputMode::AddShort(s) => {
+        InputMode::AddShort(s, cursor) => {
             let popup_area = centered_rect(50, 5, frame.area());
-            let display = format!("{}_", s);
+            let display = render_text_with_cursor(s, *cursor);
             let popup = Paragraph::new(display)
                 .block(Block::bordered().title("Add entry — short form (Enter to continue, Esc to cancel)"))
                 .style(Style::new().bg(Color::Black).fg(Color::Cyan));
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
         }
-        InputMode::AddLong(short, long) => {
+        InputMode::AddLong(short, long, cursor) => {
             let popup_area = centered_rect(50, 5, frame.area());
-            let display = format!("{} -> {}_", short, long);
+            let display = format!("{} -> {}", short, render_text_with_cursor(long, *cursor));
             let popup = Paragraph::new(display)
                 .block(Block::bordered().title("Add entry — long form (Enter to confirm, Esc to cancel)"))
                 .style(Style::new().bg(Color::Black).fg(Color::Cyan));
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
         }
-        InputMode::EditLong(_, text) => {
+        InputMode::EditLong(_, text, cursor) => {
             let popup_area = centered_rect(50, 5, frame.area());
-            let display = format!("{}_", text);
+            let display = render_text_with_cursor(text, *cursor);
             let popup = Paragraph::new(display)
                 .block(Block::bordered().title("Edit long form (Enter to confirm, Esc to cancel)"))
                 .style(Style::new().bg(Color::Black).fg(Color::Cyan));
@@ -1751,10 +1756,10 @@ fn render(frame: &mut Frame, app: &mut App) {
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
         }
-        InputMode::AddVariant(group_idx, text) => {
+        InputMode::AddVariant(group_idx, text, cursor) => {
             let entry = &app.current_dict_entries()[*group_idx];
             let popup_area = centered_rect(50, 5, frame.area());
-            let display = format!("{} → {} : {}_", entry.short, entry.long, text);
+            let display = format!("{} → {} : {}", entry.short, entry.long, render_text_with_cursor(text, *cursor));
             let popup = Paragraph::new(display)
                 .block(Block::bordered().title("Add variant (Enter to confirm, Esc to cancel)"))
                 .style(Style::new().bg(Color::Black).fg(Color::Cyan));
@@ -2554,13 +2559,13 @@ mod tests {
 
         // Press 'a' to start adding
         handle_dict_key(&mut app, KeyCode::Char('a'));
-        assert!(matches!(app.input_mode, InputMode::AddShort(_)));
+        assert!(matches!(app.input_mode, InputMode::AddShort(_, _)));
 
         // Type "TST"
         handle_input_mode(&mut app, KeyCode::Char('T'));
         handle_input_mode(&mut app, KeyCode::Char('S'));
         handle_input_mode(&mut app, KeyCode::Char('T'));
-        if let InputMode::AddShort(ref s) = app.input_mode {
+        if let InputMode::AddShort(ref s, _) = app.input_mode {
             assert_eq!(s, "TST");
         } else {
             panic!("Expected AddShort mode");
@@ -2568,7 +2573,7 @@ mod tests {
 
         // Press Enter to move to long form
         handle_input_mode(&mut app, KeyCode::Enter);
-        assert!(matches!(app.input_mode, InputMode::AddLong(_, _)));
+        assert!(matches!(app.input_mode, InputMode::AddLong(_, _, _)));
 
         // Type "TESTING"
         for c in "TESTING".chars() {
