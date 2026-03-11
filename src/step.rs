@@ -1,4 +1,4 @@
-use fancy_regex::Regex;
+use fancy_regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 
 use crate::address::Field;
@@ -66,6 +66,85 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
         }
     }
     result
+}
+
+/// Expand a replacement template with capture group backrefs and table lookups.
+///
+/// Syntax:
+/// - `$N` — capture group N (single digit, standard backref)
+/// - `${N}` — capture group N (braced)
+/// - `${N:table_name}` — capture group N, looked up in table (via to_long)
+/// - `${N/M:fraction}` — fraction expansion (N=numerator group, M=denominator group)
+pub fn expand_replacement(template: &str, caps: &Captures, tables: &Abbreviations) -> String {
+    let mut result = String::with_capacity(template.len());
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            if chars[i + 1] == '{' {
+                // ${...} syntax
+                if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
+                    let inner: String = chars[i + 2..i + 2 + close].iter().collect();
+                    result.push_str(&resolve_template_token(&inner, caps, tables));
+                    i = i + 2 + close + 1;
+                    continue;
+                }
+            } else if chars[i + 1].is_ascii_digit() {
+                // $N syntax (single digit)
+                let n = (chars[i + 1] as u8 - b'0') as usize;
+                if let Some(m) = caps.get(n) {
+                    result.push_str(m.as_str());
+                }
+                i += 2;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+/// Resolve a single template token (the content inside ${...}).
+fn resolve_template_token(token: &str, caps: &Captures, tables: &Abbreviations) -> String {
+    // Check for fraction: N/M:fraction
+    if let Some(frac_idx) = token.find(":fraction") {
+        let nums = &token[..frac_idx];
+        if let Some(slash) = nums.find('/') {
+            let num_group: usize = nums[..slash].parse().unwrap_or(0);
+            let den_group: usize = nums[slash + 1..].parse().unwrap_or(0);
+            let num_val: u16 = caps.get(num_group)
+                .map(|m| m.as_str().trim().parse().unwrap_or(0))
+                .unwrap_or(0);
+            let den_val: u16 = caps.get(den_group)
+                .map(|m| m.as_str().trim().parse().unwrap_or(0))
+                .unwrap_or(0);
+            if num_val > 0 && den_val > 0 && num_val <= 999 && den_val <= 999 {
+                return crate::tables::numbers::fraction(num_val, den_val);
+            }
+        }
+        return String::new();
+    }
+
+    // Check for table lookup: N:table_name
+    if let Some(colon) = token.find(':') {
+        let group_num: usize = token[..colon].parse().unwrap_or(0);
+        let table_name = &token[colon + 1..];
+        if let Some(m) = caps.get(group_num) {
+            let captured = m.as_str().trim();
+            if let Some(table) = tables.get(table_name) {
+                return table.to_long(captured).unwrap_or(captured).to_string();
+            }
+            return captured.to_string();
+        }
+        return String::new();
+    }
+
+    // Plain group number
+    let group_num: usize = token.parse().unwrap_or(0);
+    caps.get(group_num).map(|m| m.as_str().to_string()).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -812,5 +891,45 @@ skip_if_filled = true
         apply_step(&mut state, &steps[0], &abbr, &output);
         assert_eq!(state.fields.unit.as_deref(), Some("EXISTING"));
         assert!(state.fields.unit_type.is_none());
+    }
+
+    #[test]
+    fn test_expand_replacement_simple_backref() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let re = Regex::new(r"(HIGHWAY)\s+(\d{1,3})").unwrap();
+        let caps = re.captures("HIGHWAY 42").unwrap().unwrap();
+        let result = expand_replacement("$1 ${2:number_cardinal}", &caps, &abbr);
+        assert_eq!(result, "HIGHWAY FORTY TWO");
+    }
+
+    #[test]
+    fn test_expand_replacement_ordinal() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let re = Regex::new(r"(\d{1,3})(ST|ND|RD|TH)").unwrap();
+        let caps = re.captures("21ST").unwrap().unwrap();
+        let result = expand_replacement("${1:number_ordinal}", &caps, &abbr);
+        assert_eq!(result, "TWENTY FIRST");
+    }
+
+    #[test]
+    fn test_expand_replacement_fraction() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
+        let caps = re.captures("8 5/8").unwrap().unwrap();
+        let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
+        assert_eq!(result, "EIGHT AND FIVE EIGHTHS");
+    }
+
+    #[test]
+    fn test_expand_replacement_fraction_half() {
+        use crate::tables::abbreviations::build_default_tables;
+        let abbr = build_default_tables();
+        let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
+        let caps = re.captures("8 1/2").unwrap().unwrap();
+        let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
+        assert_eq!(result, "EIGHT AND ONE HALF");
     }
 }
