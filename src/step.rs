@@ -89,7 +89,8 @@ pub enum Step {
         label: String,
         pattern: Regex,
         pattern_template: String,
-        target: Field,
+        target: Option<Field>,
+        targets: Option<std::collections::HashMap<Field, usize>>,
         skip_if_filled: bool,
         replacement: Option<(Regex, String)>,
         source: Option<Field>,
@@ -207,10 +208,16 @@ pub fn apply_step(
                 None => state.working = result,
             }
         }
-        Step::Extract { pattern, target, skip_if_filled, replacement, source, .. } => {
+        Step::Extract { pattern, target, targets, skip_if_filled, replacement, source, .. } => {
             if *skip_if_filled {
-                if state.fields.field(*target).is_some() {
-                    return;
+                if let Some(targets_map) = targets {
+                    if targets_map.keys().any(|f| state.fields.field(*f).is_some()) {
+                        return;
+                    }
+                } else if let Some(target_field) = target {
+                    if state.fields.field(*target_field).is_some() {
+                        return;
+                    }
                 }
             }
             let extract_result = match source {
@@ -227,11 +234,21 @@ pub fn apply_step(
                 None => extract_remove(&mut state.working, pattern),
             };
             if let Some(groups) = extract_result {
-                let mut val = groups[0].clone().unwrap_or_default();
-                if let Some((re, repl)) = replacement {
-                    replace_pattern(&mut val, re, repl);
+                if let Some(targets_map) = targets {
+                    for (field, group_num) in targets_map {
+                        if let Some(Some(val)) = groups.get(*group_num) {
+                            if !val.is_empty() {
+                                *state.fields.field_mut(*field) = Some(val.clone());
+                            }
+                        }
+                    }
+                } else if let Some(target_field) = target {
+                    let mut val = groups[0].clone().unwrap_or_default();
+                    if let Some((re, repl)) = replacement {
+                        replace_pattern(&mut val, re, repl);
+                    }
+                    *state.fields.field_mut(*target_field) = none_if_empty(val);
                 }
-                *state.fields.field_mut(*target) = none_if_empty(val);
             }
         }
         Step::Standardize { target, matching_table, format_table, pattern, mode, .. } => {
@@ -308,6 +325,8 @@ pub struct StepDef {
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub targets: Option<std::collections::HashMap<String, usize>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,10 +399,31 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
 
-            let target = def
-                .target
-                .as_ref()
-                .ok_or_else(|| format!("extract step '{}' missing target", def.label))?;
+            let targets = if let Some(ref t) = def.targets {
+                let mut map = std::collections::HashMap::new();
+                for (field_name, group_num) in t {
+                    map.insert(parse_field(field_name)?, *group_num);
+                }
+                Some(map)
+            } else {
+                None
+            };
+
+            let target = if targets.is_some() {
+                if def.target.is_some() {
+                    return Err(format!("extract step '{}' has both target and targets", def.label));
+                }
+                if def.replacement.is_some() {
+                    return Err(format!("extract step '{}' has both targets and replacement", def.label));
+                }
+                None
+            } else {
+                Some(parse_field(
+                    def.target
+                        .as_ref()
+                        .ok_or_else(|| format!("extract step '{}' missing target or targets", def.label))?
+                )?)
+            };
 
             let replacement = if let Some(ref r) = def.replacement {
                 let expanded_r = expand_template(r, abbr);
@@ -404,7 +444,8 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 label: def.label.clone(),
                 pattern,
                 pattern_template: template,
-                target: parse_field(target)?,
+                target,
+                targets,
                 skip_if_filled: def.skip_if_filled.unwrap_or(false),
                 replacement,
                 source,
@@ -509,6 +550,7 @@ mod tests {
             replacement: Some("ST APT".to_string()),
             table: None, target: None, source: None,
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+            targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 N STAPT 4B".to_string());
@@ -552,6 +594,7 @@ table = "street_name_abbr"
             table: None, target: Some("street_number".to_string()), source: None,
             skip_if_filled: Some(true),
             matching_table: None, format_table: None, mode: None,
+            targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
@@ -576,6 +619,7 @@ table = "street_name_abbr"
             matching_table: Some("suffix_all".to_string()),
             format_table: Some("suffix_usps".to_string()),
             mode: None,
+            targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared(String::new());
@@ -655,6 +699,7 @@ table = "street_name_abbr"
             matching_table: None,
             format_table: None,
             mode: None,
+            targets: None,
         };
         let toml_str = toml::to_string_pretty(&def).unwrap();
         let parsed: StepDef = toml::from_str(&toml_str).unwrap();
@@ -685,6 +730,7 @@ table = "street_name_abbr"
             replacement: Some("".to_string()),
             table: None, target: None, source: Some("unit".to_string()),
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+            targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
@@ -710,6 +756,7 @@ table = "street_name_abbr"
             source: Some("unit".to_string()),
             skip_if_filled: Some(true),
             matching_table: None, format_table: None, mode: None,
+            targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("MAIN ST".to_string());
@@ -718,5 +765,52 @@ table = "street_name_abbr"
         apply_step(&mut state, &step, &abbr, &output);
         assert_eq!(state.fields.street_number.as_deref(), Some("42"));
         assert!(state.fields.unit.is_none());
+    }
+
+    #[test]
+    fn test_extract_with_targets() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let toml_str = r#"
+[[step]]
+type = "extract"
+label = "unit_split"
+pattern = '(APT)\W*(\d+[A-Z]?)\s*$'
+targets = { unit_type = 1, unit = 2 }
+"#;
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        let steps = compile_steps(&defs.step, &abbr);
+        let mut state = AddressState::new_from_prepared("123 MAIN ST APT 4B".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &steps[0], &abbr, &output);
+        assert_eq!(state.fields.unit_type.as_deref(), Some("APT"));
+        assert_eq!(state.fields.unit.as_deref(), Some("4B"));
+        assert_eq!(state.working, "123 MAIN ST");
+    }
+
+    #[test]
+    fn test_extract_targets_skip_if_filled() {
+        use crate::address::AddressState;
+        use crate::tables::abbreviations::build_default_tables;
+        use crate::config::OutputConfig;
+        let abbr = build_default_tables();
+        let toml_str = r#"
+[[step]]
+type = "extract"
+label = "unit_split"
+pattern = '(APT)\W*(\d+)\s*$'
+targets = { unit_type = 1, unit = 2 }
+skip_if_filled = true
+"#;
+        let defs: StepsDef = toml::from_str(toml_str).unwrap();
+        let steps = compile_steps(&defs.step, &abbr);
+        let mut state = AddressState::new_from_prepared("123 MAIN ST APT 4B".to_string());
+        state.fields.unit = Some("EXISTING".to_string());
+        let output = OutputConfig::default();
+        apply_step(&mut state, &steps[0], &abbr, &output);
+        assert_eq!(state.fields.unit.as_deref(), Some("EXISTING"));
+        assert!(state.fields.unit_type.is_none());
     }
 }

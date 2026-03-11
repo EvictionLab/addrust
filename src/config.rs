@@ -256,6 +256,7 @@ skip_if_filled = true
             label: "test".to_string(),
             pattern: None, table: None, target: None, replacement: None, source: None,
             skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+            targets: None,
         }];
         assert!(!sc.is_empty());
     }
