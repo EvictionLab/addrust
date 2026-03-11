@@ -321,6 +321,14 @@ skip_if_filled = true
 }
 
 #[test]
+fn test_unit_type_extracted() {
+    let p = Pipeline::default();
+    let addr = p.parse("123 Main St Apt 4B");
+    assert_eq!(addr.unit_type.as_deref(), Some("APT"));
+    assert_eq!(addr.unit.as_deref(), Some("4B"));
+}
+
+#[test]
 fn test_invalid_custom_step_skipped_gracefully() {
     let config: Config = toml::from_str(
         r#"

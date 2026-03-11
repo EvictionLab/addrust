@@ -73,7 +73,7 @@ skip_if_filled = true
 type = "extract"
 label = "unit_type_value"
 pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$'
-target = "unit"
+targets = { unit_type = 1, unit = 2 }
 skip_if_filled = true
 
 [[step]]
