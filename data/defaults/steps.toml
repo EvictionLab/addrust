@@ -183,6 +183,13 @@ label = "ordinal_to_word"
 pattern = '\b(\d{1,3})(ST|ND|RD|TH)\b'
 replacement = '${1:number_ordinal}'
 
+[[step]]
+type = "extract"
+label = "trailing_number_to_street_number"
+pattern = '\b(\d{1,3})\s*$'
+target = "street_number"
+skip_if_filled = true
+
 # --- Standardization ---
 [[step]]
 type = "standardize"

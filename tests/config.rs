@@ -362,6 +362,31 @@ fn test_fractional_road() {
 }
 
 #[test]
+fn test_trailing_number_to_street_number() {
+    // Disable extra_front so the trailing number isn't consumed early by that step.
+    // This tests the trailing_number_to_street_number step in isolation.
+    let config: Config = toml::from_str(
+        r#"
+[steps]
+disabled = ["extra_front"]
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("MAIN 123");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+}
+
+#[test]
+fn test_trailing_number_skipped_when_street_number_exists() {
+    let p = Pipeline::default();
+    let addr = p.parse("123 MAIN ST");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    // No trailing number extracted
+}
+
+#[test]
 fn test_invalid_custom_step_skipped_gracefully() {
     let config: Config = toml::from_str(
         r#"
