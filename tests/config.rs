@@ -429,15 +429,13 @@ fn test_bare_zero_street_number_preserved() {
 }
 
 #[test]
-fn test_highway_one_extracted_as_street_number() {
-    // "HIGHWAY 1" — no leading street number, so the trailing 1 becomes street_number.
-    // The highway_number_to_word step only fires when there IS a leading address number.
-    // Without context to protect it, the bare "1" after HIGHWAY is consumed as street_number.
+fn test_highway_one_not_extracted_as_number() {
+    // "HIGHWAY 1" — number-to-word runs early, converting to "HIGHWAY ONE"
+    // before extra_front can split it. No street_number extracted.
     let p = Pipeline::default();
     let addr = p.parse("HIGHWAY 1");
-    assert_eq!(addr.street_number.as_deref(), Some("1"));
-    // HIGHWAY remains as street name (no suffix extracted)
-    assert!(addr.street_name.is_none() || addr.street_name.as_deref() == Some("HIGHWAY"));
+    assert!(addr.street_number.is_none(), "street_number should be None, got {:?}", addr.street_number);
+    assert_eq!(addr.street_name.as_deref(), Some("HIGHWAY ONE"));
 }
 
 #[test]
