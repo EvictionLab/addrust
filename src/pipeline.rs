@@ -165,8 +165,7 @@ impl Pipeline {
         inputs.par_iter().map(|input| self.parse(input)).collect()
     }
 
-    /// After all steps, assign remaining working string to street_name
-    /// and perform final cleanup.
+    /// After all steps, assign remaining working string to street_name.
     fn finalize(&self, state: &mut AddressState) {
         // Remove any leftover placeholder tags
         let re_tags = Regex::new(r"<[a-z0-9_]+>").unwrap();
@@ -176,25 +175,6 @@ impl Pipeline {
 
         if state.fields.street_name.is_none() && !remaining.is_empty() {
             state.fields.street_name = Some(remaining);
-        }
-
-        // Clean up unit: strip leading # and whitespace
-        if let Some(ref u) = state.fields.unit {
-            let cleaned = u.trim_start_matches('#').trim().to_string();
-            state.fields.unit = if cleaned.is_empty() { None } else { Some(cleaned) };
-        }
-
-        // If no street number but unit exists, promote unit to street number
-        if state.fields.street_number.is_none() && state.fields.unit.is_some() {
-            state.fields.street_number = state.fields.unit.take();
-        }
-
-        // Strip leading zeros from street number
-        if let Some(ref num) = state.fields.street_number {
-            let stripped = num.trim_start_matches('0');
-            if !stripped.is_empty() && stripped != num {
-                state.fields.street_number = Some(stripped.to_string());
-            }
         }
     }
 }

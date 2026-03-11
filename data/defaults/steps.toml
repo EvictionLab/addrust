@@ -134,6 +134,36 @@ label = "name_st_to_saint"
 pattern = '(?:^|\s)ST\b(?=\s[A-Z]{3,})'
 replacement = 'SAINT'
 
+# --- Post-extraction cleanup ---
+[[step]]
+type = "rewrite"
+label = "strip_unit_hash"
+pattern = '^#\s*'
+replacement = ''
+source = "unit"
+
+[[step]]
+type = "rewrite"
+label = "strip_leading_zeros_street_number"
+pattern = '^0+(?=\d)'
+replacement = ''
+source = "street_number"
+
+[[step]]
+type = "rewrite"
+label = "strip_leading_zeros_unit"
+pattern = '^0+(?=\d)'
+replacement = ''
+source = "unit"
+
+[[step]]
+type = "extract"
+label = "promote_unit_to_street_number"
+pattern = '^.+$'
+source = "unit"
+target = "street_number"
+skip_if_filled = true
+
 # --- Standardization ---
 [[step]]
 type = "standardize"
