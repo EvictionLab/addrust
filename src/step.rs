@@ -182,8 +182,7 @@ pub enum Step {
     Standardize {
         label: String,
         target: Field,
-        matching_table: Option<String>,
-        format_table: Option<String>,
+        table: String,
         pattern: Option<(Regex, String)>,
         mode: StandardizeMode,
         enabled: bool,
@@ -238,17 +237,15 @@ impl Step {
 
 fn standardize_value(
     value: &str,
-    matching_table: &AbbrTable,
-    canonical_table: &AbbrTable,
+    table: &AbbrTable,
     format: OutputFormat,
 ) -> String {
-    let short = matching_table.to_short(value).unwrap_or(value);
-    match format {
-        OutputFormat::Short => short.to_string(),
-        OutputFormat::Long => canonical_table
-            .to_long(short)
-            .unwrap_or(short)
-            .to_string(),
+    match table.standardize(value) {
+        Some((_, short, long)) => match format {
+            OutputFormat::Short => short.to_string(),
+            OutputFormat::Long => long.to_string(),
+        },
+        None => value.to_string(),
     }
 }
 
@@ -364,7 +361,7 @@ pub fn apply_step(
                 }
             }
         }
-        Step::Standardize { target, matching_table, format_table, pattern, mode, .. } => {
+        Step::Standardize { target, table, pattern, mode, .. } => {
             // Handle regex-based standardize (like po_box)
             if let Some((re, repl)) = pattern {
                 if let Some(val) = state.fields.field(*target) {
@@ -380,35 +377,24 @@ pub fn apply_step(
                 Some(v) => v.to_string(),
                 None => return,
             };
-            let m_name = match matching_table {
-                Some(n) => n,
-                None => return,
-            };
-            let f_name = match format_table {
-                Some(n) => n,
-                None => return,
-            };
-            let m = match tables.get(m_name) {
+
+            let t = match tables.get(table) {
                 Some(t) => t,
                 None => return,
             };
-            let c = match tables.get(f_name) {
-                Some(t) => t,
-                None => return,
-            };
+
             let fmt = output.format_for_field(*target);
 
             match mode {
                 StandardizeMode::WholeField => {
-                    *state.fields.field_mut(*target) = Some(standardize_value(&val, m, c, fmt));
+                    *state.fields.field_mut(*target) = Some(standardize_value(&val, t, fmt));
                 }
                 StandardizeMode::PerWord => {
-                    let mut result = val.clone();
-                    for (short, long) in m.short_to_long_pairs() {
-                        let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
-                        replace_pattern(&mut result, &re, &long);
-                    }
-                    *state.fields.field_mut(*target) = none_if_empty(result);
+                    let words: Vec<&str> = val.split_whitespace().collect();
+                    let result: Vec<String> = words.iter()
+                        .map(|w| standardize_value(w, t, fmt))
+                        .collect();
+                    *state.fields.field_mut(*target) = Some(result.join(" "));
                 }
             }
         }
@@ -575,35 +561,31 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 _ => StandardizeMode::WholeField,
             };
 
-            // Regex-based standardize: has pattern+replacement instead of tables
             let pattern = if let Some(ref p) = def.pattern {
                 let expanded = expand_template(p, abbr);
                 let re = Regex::new(&expanded)
-                    .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-                let repl = def
-                    .replacement
-                    .clone()
-                    .unwrap_or_default();
+                    .map_err(|e| format!("standardize step '{}' bad pattern: {}", def.label, e))?;
+                let repl = def.replacement.clone().unwrap_or_default();
                 Some((re, repl))
             } else {
                 None
             };
 
-            // Table-based standardize requires both tables
-            if pattern.is_none() {
-                if def.matching_table.is_none() || def.format_table.is_none() {
-                    return Err(format!(
-                        "standardize step '{}' needs either pattern+replacement or matching_table+format_table",
+            let table = if pattern.is_none() {
+                def.table.clone()
+                    .or(def.matching_table.clone()) // backward compat: accept old field name
+                    .ok_or_else(|| format!(
+                        "standardize step '{}' needs either pattern+replacement or table",
                         def.label
-                    ));
-                }
-            }
+                    ))?
+            } else {
+                def.table.clone().unwrap_or_default()
+            };
 
             Ok(Step::Standardize {
                 label: def.label.clone(),
                 target: parse_field(target)?,
-                matching_table: def.matching_table.clone(),
-                format_table: def.format_table.clone(),
+                table,
                 pattern,
                 mode,
                 enabled: true,
@@ -726,20 +708,23 @@ table = "street_name_abbr"
         let def = StepDef {
             step_type: "standardize".to_string(),
             label: "std_suffix".to_string(),
-            pattern: None, replacement: None, table: None, source: None,
+            pattern: None, replacement: None,
+            table: Some("suffix_all".to_string()),
+            source: None,
             target: Some("suffix".to_string()),
             skip_if_filled: None,
-            matching_table: Some("suffix_all".to_string()),
-            format_table: Some("suffix_all".to_string()),
+            matching_table: None,
+            format_table: None,
             mode: None,
             targets: None,
         };
         let step = compile_step(&def, &abbr).unwrap();
-        let mut state = AddressState::new_from_prepared(String::new());
-        state.fields.suffix = Some("ST".to_string());
         let output = OutputConfig::default();
+        let mut state = AddressState::new_from_prepared(String::new());
+        state.fields.suffix = Some("AV".to_string());
         apply_step(&mut state, &step, &abbr, &output);
-        assert_eq!(state.fields.suffix.as_deref(), Some("STREET"));
+        // AV → finds AVENUE group → canonical long (default output) = AVENUE
+        assert_eq!(state.fields.suffix.as_deref(), Some("AVENUE"));
     }
 
     #[test]

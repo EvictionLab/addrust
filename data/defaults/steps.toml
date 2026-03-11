@@ -197,29 +197,25 @@ skip_if_filled = true
 type = "standardize"
 label = "standardize_pre_direction"
 target = "pre_direction"
-matching_table = "direction"
-format_table = "direction"
+table = "direction"
 
 [[step]]
 type = "standardize"
 label = "standardize_post_direction"
 target = "post_direction"
-matching_table = "direction"
-format_table = "direction"
+table = "direction"
 
 [[step]]
 type = "standardize"
 label = "standardize_suffix"
 target = "suffix"
-matching_table = "suffix_all"
-format_table = "suffix_all"
+table = "suffix_all"
 
 [[step]]
 type = "standardize"
 label = "standardize_unit_location"
 target = "unit"
-matching_table = "unit_location"
-format_table = "unit_location"
+table = "unit_location"
 
 [[step]]
 type = "standardize"
