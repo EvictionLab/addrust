@@ -294,7 +294,8 @@ replacement = 'HWY'
     .unwrap();
     let p = Pipeline::from_config(&config);
     let addr = p.parse("123 HIGHWAY 50");
-    assert_eq!(addr.street_name.as_deref(), Some("HWY 50"));
+    // After custom rewrite HWY, then highway_number_to_word converts 50 → FIFTY
+    assert_eq!(addr.street_name.as_deref(), Some("HWY FIFTY"));
 }
 
 #[test]
@@ -326,6 +327,38 @@ fn test_unit_type_extracted() {
     let addr = p.parse("123 Main St Apt 4B");
     assert_eq!(addr.unit_type.as_deref(), Some("APT"));
     assert_eq!(addr.unit.as_deref(), Some("4B"));
+}
+
+#[test]
+fn test_highway_number_to_word() {
+    let p = Pipeline::default();
+    // HIGHWAY 66 → highway_number_to_word fires → "HIGHWAY SIXTY SIX"
+    let addr = p.parse("123 HIGHWAY 66");
+    assert_eq!(addr.street_name.as_deref(), Some("HIGHWAY SIXTY SIX"));
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+}
+
+#[test]
+fn test_ordinal_to_word() {
+    let p = Pipeline::default();
+    // 42ND → ordinal_to_word fires → "FORTY SECOND"
+    let addr = p.parse("123 42ND ST");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.street_name.as_deref(), Some("FORTY SECOND"));
+    assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+}
+
+#[test]
+fn test_fractional_road() {
+    let p = Pipeline::default();
+    // After street_number extracts "123", working is "8 1/2 MILE RD"
+    // suffix extracts "RD" → "ROAD", working is "8 1/2 MILE"
+    // fractional_road fires: "8 1/2" → "EIGHT AND ONE HALF"
+    // street_name becomes "EIGHT AND ONE HALF MILE"
+    let addr = p.parse("123 8 1/2 MILE RD");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.street_name.as_deref(), Some("EIGHT AND ONE HALF MILE"));
+    assert_eq!(addr.suffix.as_deref(), Some("ROAD"));
 }
 
 #[test]

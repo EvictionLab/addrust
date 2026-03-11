@@ -279,7 +279,37 @@ pub fn apply_step(
                     }
                 }
             } else if let Some(repl) = replacement {
-                replace_pattern(&mut result, pattern, repl);
+                if repl.contains("${") {
+                    // Table lookup replacement — replace all matches right-to-left
+                    let mut matches = Vec::new();
+                    let mut search_start = 0;
+                    while search_start <= result.len() {
+                        if let Ok(Some(caps)) = pattern.captures(&result[search_start..]) {
+                            if let Some(full_match) = caps.get(0) {
+                                let abs_start = search_start + full_match.start();
+                                let abs_end = search_start + full_match.end();
+                                let expanded = expand_replacement(repl, &caps, tables);
+                                matches.push((abs_start, abs_end, expanded));
+                                if abs_end == full_match.start() {
+                                    // zero-width match — advance by one char to avoid infinite loop
+                                    search_start = abs_end + 1;
+                                } else {
+                                    search_start = abs_end;
+                                }
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    // Replace right-to-left to preserve offsets
+                    for (start, end, expanded) in matches.into_iter().rev() {
+                        result.replace_range(start..end, &expanded);
+                    }
+                } else {
+                    replace_pattern(&mut result, pattern, repl);
+                }
             }
             squish(&mut result);
             match source {
