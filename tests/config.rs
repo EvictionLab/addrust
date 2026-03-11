@@ -475,3 +475,51 @@ target = "unit"
     assert!(utv.pattern.is_none());
 }
 
+#[test]
+fn test_step_overrides_applied_in_pipeline() {
+    let config: Config = toml::from_str(
+        r#"
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    // The dash-digit variant should now be captured
+    let addr = p.parse("PO BOX 123-4");
+    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
+}
+
+#[test]
+fn test_step_overrides_backward_compat_with_pattern_overrides() {
+    // pattern_overrides still works
+    let config: Config = toml::from_str(
+        r#"
+[steps.pattern_overrides]
+po_box = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("PO BOX 123-4");
+    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
+}
+
+#[test]
+fn test_step_overrides_override_pattern_overrides() {
+    // step_overrides takes precedence over pattern_overrides
+    let config: Config = toml::from_str(
+        r#"
+[steps.pattern_overrides]
+po_box = 'OLD_PATTERN'
+
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    let addr = p.parse("PO BOX 123-4");
+    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
+}
+

@@ -50,13 +50,23 @@ impl Pipeline {
             }
         }
 
+        // Apply step_overrides (takes precedence over pattern_overrides)
+        for def in &mut defs.step {
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                step_override.apply_to(def);
+            }
+        }
+
         let mut steps = compile_steps(&defs.step, &tables);
 
-        // Compile and append custom steps (with pattern overrides applied)
+        // Compile and append custom steps (with pattern overrides and step_overrides applied)
         for custom_def in &config.steps.custom_steps {
             let mut def = custom_def.clone();
             if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
                 def.pattern = Some(override_pattern.clone());
+            }
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                step_override.apply_to(&mut def);
             }
             match compile_step(&def, &tables) {
                 Ok(step) => steps.push(step),
