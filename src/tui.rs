@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 
@@ -43,6 +44,7 @@ struct WizardAccumulator {
     step_type: String,
     pattern: String,
     target: Option<String>,
+    targets: Option<HashMap<String, usize>>,
     replacement: Option<String>,
     table: Option<String>,
     skip_if_filled: Option<bool>,
@@ -56,7 +58,14 @@ struct WizardAccumulator {
 enum WizardState {
     PickType(usize),
     Pattern(String, usize, Option<String>),
+    /// For extract: choose single target vs. multiple targets
+    ExtractMode(usize),
     PickTarget(usize),
+    /// Multi-target select: (cursor, selections as field_name → group_number)
+    /// Group number 0 means not selected; 1+ means capture group N.
+    PickTargets(usize, Vec<usize>),
+    /// Text input for capture group number when assigning a multi-target field
+    TargetGroup(usize, Vec<usize>, String, usize),
     SkipIfFilled,
     Replacement(String, usize),
     RewriteMode(usize),
@@ -1162,7 +1171,7 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
             ) {
                 app.wizard_acc.pattern = pattern;
                 let next = match app.wizard_acc.step_type.as_str() {
-                    "extract" => WizardState::PickTarget(0),
+                    "extract" => WizardState::ExtractMode(0),
                     "rewrite" => WizardState::RewriteMode(0),
                     "standardize" => WizardState::Replacement(String::new(), 0),
                     _ => return,
@@ -1170,6 +1179,122 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                 app.input_mode = InputMode::AddStep(next, insert_idx);
             }
         }
+
+        WizardState::ExtractMode(selected) => {
+            const EXTRACT_MODES: &[&str] = &["Single target", "Multiple targets"];
+            match code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.input_mode = InputMode::AddStep(
+                        WizardState::ExtractMode((selected + 1) % EXTRACT_MODES.len()),
+                        insert_idx,
+                    );
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.input_mode = InputMode::AddStep(
+                        WizardState::ExtractMode(if selected == 0 { EXTRACT_MODES.len() - 1 } else { selected - 1 }),
+                        insert_idx,
+                    );
+                }
+                KeyCode::Enter => {
+                    let next = if selected == 0 {
+                        WizardState::PickTarget(0)
+                    } else {
+                        WizardState::PickTargets(0, vec![0; TARGET_FIELDS.len()])
+                    };
+                    app.input_mode = InputMode::AddStep(next, insert_idx);
+                }
+                KeyCode::Esc => { app.input_mode = InputMode::Normal; }
+                _ => {}
+            }
+        }
+
+        WizardState::PickTargets(selected, groups) => match code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.input_mode = InputMode::AddStep(
+                    WizardState::PickTargets((selected + 1) % TARGET_FIELDS.len(), groups),
+                    insert_idx,
+                );
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.input_mode = InputMode::AddStep(
+                    WizardState::PickTargets(if selected == 0 { TARGET_FIELDS.len() - 1 } else { selected - 1 }, groups),
+                    insert_idx,
+                );
+            }
+            KeyCode::Char(' ') => {
+                // Toggle: if already assigned, clear it; otherwise prompt for group number
+                let mut groups = groups;
+                if groups[selected] > 0 {
+                    groups[selected] = 0;
+                    app.input_mode = InputMode::AddStep(
+                        WizardState::PickTargets(selected, groups),
+                        insert_idx,
+                    );
+                } else {
+                    app.input_mode = InputMode::AddStep(
+                        WizardState::TargetGroup(selected, groups, String::new(), 0),
+                        insert_idx,
+                    );
+                }
+            }
+            KeyCode::Enter => {
+                // Finalize: build targets map from non-zero entries
+                let mut targets = HashMap::new();
+                for (i, &g) in groups.iter().enumerate() {
+                    if g > 0 {
+                        targets.insert(TARGET_FIELDS[i].0.to_string(), g);
+                    }
+                }
+                if targets.is_empty() {
+                    return; // Must select at least one target
+                }
+                app.wizard_acc.targets = Some(targets);
+                app.input_mode = InputMode::AddStep(WizardState::SkipIfFilled, insert_idx);
+            }
+            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
+            _ => {}
+        },
+
+        WizardState::TargetGroup(field_idx, groups, text, cursor) => match code {
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                let mut text = text;
+                text.insert(cursor, c);
+                app.input_mode = InputMode::AddStep(
+                    WizardState::TargetGroup(field_idx, groups, text, cursor + 1),
+                    insert_idx,
+                );
+            }
+            KeyCode::Backspace => {
+                if cursor > 0 {
+                    let mut text = text;
+                    text.remove(cursor - 1);
+                    app.input_mode = InputMode::AddStep(
+                        WizardState::TargetGroup(field_idx, groups, text, cursor - 1),
+                        insert_idx,
+                    );
+                }
+            }
+            KeyCode::Enter => {
+                if let Ok(n) = text.parse::<usize>() {
+                    if n > 0 {
+                        let mut groups = groups;
+                        groups[field_idx] = n;
+                        app.input_mode = InputMode::AddStep(
+                            WizardState::PickTargets(field_idx, groups),
+                            insert_idx,
+                        );
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                // Cancel group entry, go back to PickTargets
+                app.input_mode = InputMode::AddStep(
+                    WizardState::PickTargets(field_idx, groups),
+                    insert_idx,
+                );
+            }
+            _ => {}
+        },
 
         WizardState::PickTarget(selected) => match code {
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1336,14 +1461,14 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                     label: label.clone(),
                     pattern: if acc.pattern.is_empty() { None } else { Some(acc.pattern.clone()) },
                     table: acc.table.clone(),
-                    target: acc.target.clone(),
+                    target: if acc.targets.is_some() { None } else { acc.target.clone() },
                     replacement: acc.replacement.clone(),
                     skip_if_filled: acc.skip_if_filled,
                     source: None,
                     matching_table: acc.matching_table.clone(),
                     format_table: acc.format_table.clone(),
                     mode: acc.mode.clone(),
-                    targets: None,
+                    targets: acc.targets.clone(),
                 };
 
                 let step_state = StepState {
@@ -1716,6 +1841,25 @@ fn render_wizard(frame: &mut Frame, wizard: &WizardState, acc: &WizardAccumulato
             let title = format!("Add {} — pattern (Enter to continue, Esc to cancel)", acc.step_type);
             render_wizard_text_input(frame, popup_area, &title, text, *cursor, error.as_deref());
         }
+        WizardState::ExtractMode(selected) => {
+            let options = ["Single target", "Multiple targets (named capture groups)"];
+            let items: Vec<ListItem> = options
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let style = if i == *selected {
+                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new()
+                    };
+                    let prefix = if i == *selected { "> " } else { "  " };
+                    ListItem::new(format!("{}{}", prefix, label)).style(style)
+                })
+                .collect();
+            let list = List::new(items)
+                .block(Block::bordered().title("Add extract — target mode"));
+            frame.render_widget(list, popup_area);
+        }
         WizardState::PickTarget(selected) => {
             let items: Vec<ListItem> = TARGET_FIELDS
                 .iter()
@@ -1733,6 +1877,36 @@ fn render_wizard(frame: &mut Frame, wizard: &WizardState, acc: &WizardAccumulato
             let list = List::new(items)
                 .block(Block::bordered().title("Add step — target field (Enter to select)"));
             frame.render_widget(list, popup_area);
+        }
+        WizardState::PickTargets(selected, groups) => {
+            let items: Vec<ListItem> = TARGET_FIELDS
+                .iter()
+                .enumerate()
+                .map(|(i, (_, display))| {
+                    let style = if i == *selected {
+                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new()
+                    };
+                    let prefix = if i == *selected { "> " } else { "  " };
+                    let check = if groups[i] > 0 {
+                        format!("[group {}] ", groups[i])
+                    } else {
+                        "[ ] ".to_string()
+                    };
+                    ListItem::new(format!("{}{}{}", prefix, check, display)).style(style)
+                })
+                .collect();
+            let list = List::new(items)
+                .block(Block::bordered().title("Add extract — targets (Space to toggle, Enter to confirm)"));
+            frame.render_widget(list, popup_area);
+        }
+        WizardState::TargetGroup(_, _, text, cursor) => {
+            render_wizard_text_input(
+                frame, popup_area,
+                "Capture group number for this field (Enter to confirm, Esc to cancel)",
+                text, *cursor, None,
+            );
         }
         WizardState::SkipIfFilled => {
             let popup = Paragraph::new("Skip if target field already has a value? (y/n)")

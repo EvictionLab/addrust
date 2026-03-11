@@ -121,9 +121,13 @@ fn resolve_template_token(token: &str, caps: &Captures, tables: &Abbreviations) 
             let den_val: u16 = caps.get(den_group)
                 .map(|m| m.as_str().trim().parse().unwrap_or(0))
                 .unwrap_or(0);
-            if num_val > 0 && den_val > 0 && num_val <= 999 && den_val <= 999 {
+            if num_val > 0 && den_val >= 2 && num_val <= 999 && den_val <= 999 {
                 return crate::tables::numbers::fraction(num_val, den_val);
             }
+            // Denominator < 2 or out of range — keep original text (e.g. "3/1")
+            let num_str = caps.get(num_group).map(|m| m.as_str()).unwrap_or("");
+            let den_str = caps.get(den_group).map(|m| m.as_str()).unwrap_or("");
+            return format!("{}/{}", num_str, den_str);
         }
         return String::new();
     }
