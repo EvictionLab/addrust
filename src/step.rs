@@ -416,8 +416,10 @@ pub struct StepDef {
     pub replacement: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_if_filled: Option<bool>,
+    /// Deprecated: use `table` instead. Kept for backward compat with user configs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matching_table: Option<String>,
+    /// Deprecated: ignored. Use `table` instead. Kept for backward compat deserialization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format_table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

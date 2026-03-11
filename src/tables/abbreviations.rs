@@ -188,14 +188,17 @@ impl AbbrTable {
             });
         }
 
-        // Add phase
-        for entry in &overrides.add {
+        // Add/merge phase: process `add` entries, then deprecated `override` entries
+        // (override entries are treated as canonical adds for backward compat)
+        let add_iter = overrides.add.iter().map(|e| (e, e.canonical.unwrap_or(false)));
+        let override_iter = overrides.override_entries.iter().map(|e| (e, true));
+
+        for (entry, is_canonical) in add_iter.chain(override_iter) {
             let short = entry.short.to_uppercase();
             let long = entry.long.to_uppercase();
             let new_variants: Vec<String> = entry.variants.iter()
                 .map(|v| v.to_uppercase())
                 .collect();
-            let is_canonical = entry.canonical.unwrap_or(false);
 
             // Find existing group by canonical short or long (skip empty-string matches)
             let existing = groups.iter().position(|g| {

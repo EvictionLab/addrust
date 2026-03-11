@@ -98,6 +98,9 @@ pub struct DictOverrides {
     pub add: Vec<DictEntry>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub remove: Vec<String>,
+    /// Deprecated: use `add` with `canonical = true` instead.
+    /// Kept for backward compatibility with existing user config files.
+    /// Treated as `add` entries with `canonical = true` during patch.
     #[serde(rename = "override", skip_serializing_if = "Vec::is_empty")]
     pub override_entries: Vec<DictEntry>,
 }
