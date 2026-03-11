@@ -29,7 +29,7 @@ impl Pipeline {
 
     /// Build a step-based pipeline from a Config (file-based configuration).
     pub fn from_steps_config(config: &crate::config::Config) -> Self {
-        use crate::step::{compile_steps, StepsDef};
+        use crate::step::{compile_step, compile_steps, StepsDef};
         use crate::tables::abbreviations::build_default_tables;
 
         let tables = build_default_tables();
@@ -51,6 +51,18 @@ impl Pipeline {
         }
 
         let mut steps = compile_steps(&defs.step, &tables);
+
+        // Compile and append custom steps (with pattern overrides applied)
+        for custom_def in &config.steps.custom_steps {
+            let mut def = custom_def.clone();
+            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
+                def.pattern = Some(override_pattern.clone());
+            }
+            match compile_step(&def, &tables) {
+                Ok(step) => steps.push(step),
+                Err(e) => eprintln!("Warning: skipping invalid custom step '{}': {}", def.label, e),
+            }
+        }
 
         // Apply step_order reordering
         if !config.steps.step_order.is_empty() {

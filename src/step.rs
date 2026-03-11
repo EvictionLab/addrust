@@ -1,5 +1,5 @@
 use fancy_regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::address::Field;
 use crate::config::OutputFormat;
@@ -257,18 +257,26 @@ pub fn apply_step(
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StepDef {
     #[serde(rename = "type")]
     pub step_type: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_if_filled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub matching_table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub format_table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
 }
 
@@ -277,20 +285,20 @@ pub struct StepsDef {
     pub step: Vec<StepDef>,
 }
 
-fn parse_field(name: &str) -> Field {
+fn parse_field(name: &str) -> Result<Field, String> {
     match name {
-        "street_number" => Field::StreetNumber,
-        "pre_direction" => Field::PreDirection,
-        "street_name" => Field::StreetName,
-        "suffix" => Field::Suffix,
-        "post_direction" => Field::PostDirection,
-        "unit" => Field::Unit,
-        "unit_type" => Field::UnitType,
-        "po_box" => Field::PoBox,
-        "building" => Field::Building,
-        "extra_front" => Field::ExtraFront,
-        "extra_back" => Field::ExtraBack,
-        _ => panic!("Unknown field name: {}", name),
+        "street_number" => Ok(Field::StreetNumber),
+        "pre_direction" => Ok(Field::PreDirection),
+        "street_name" => Ok(Field::StreetName),
+        "suffix" => Ok(Field::Suffix),
+        "post_direction" => Ok(Field::PostDirection),
+        "unit" => Ok(Field::Unit),
+        "unit_type" => Ok(Field::UnitType),
+        "po_box" => Ok(Field::PoBox),
+        "building" => Ok(Field::Building),
+        "extra_front" => Ok(Field::ExtraFront),
+        "extra_back" => Ok(Field::ExtraBack),
+        _ => Err(format!("Unknown field name: {}", name)),
     }
 }
 
@@ -363,7 +371,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 label: def.label.clone(),
                 pattern,
                 pattern_template: template,
-                target: parse_field(target),
+                target: parse_field(target)?,
                 skip_if_filled: def.skip_if_filled.unwrap_or(false),
                 replacement,
                 enabled: true,
@@ -405,7 +413,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
             Ok(Step::Standardize {
                 label: def.label.clone(),
-                target: parse_field(target),
+                target: parse_field(target)?,
                 matching_table: def.matching_table.clone(),
                 format_table: def.format_table.clone(),
                 pattern,
@@ -597,5 +605,35 @@ table = "street_name_abbr"
         assert!(expanded.contains("NORTH"));
         assert!(expanded.contains(r"\d{1,6}"));
         assert!(expanded.contains(r"[A-Z]{3,20}"));
+    }
+
+    #[test]
+    fn test_stepdef_roundtrip_serialize() {
+        let def = StepDef {
+            step_type: "extract".to_string(),
+            label: "custom_box".to_string(),
+            pattern: Some(r"\bBOX (\d+)".to_string()),
+            table: None,
+            target: Some("po_box".to_string()),
+            replacement: None,
+            skip_if_filled: Some(true),
+            matching_table: None,
+            format_table: None,
+            mode: None,
+        };
+        let toml_str = toml::to_string_pretty(&def).unwrap();
+        let parsed: StepDef = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.step_type, "extract");
+        assert_eq!(parsed.label, "custom_box");
+        assert_eq!(parsed.target.as_deref(), Some("po_box"));
+        // Optional None fields should not appear in serialized output
+        assert!(!toml_str.contains("table"));
+        assert!(!toml_str.contains("replacement"));
+    }
+
+    #[test]
+    fn test_parse_field_invalid_returns_error() {
+        let result = parse_field("nonexistent_field");
+        assert!(result.is_err());
     }
 }

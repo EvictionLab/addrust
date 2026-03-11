@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::io;
 
+use crate::step::StepDef;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
@@ -65,11 +67,16 @@ pub struct StepsConfig {
     pub pattern_overrides: HashMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub step_order: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub custom_steps: Vec<StepDef>,
 }
 
 impl StepsConfig {
     pub fn is_empty(&self) -> bool {
-        self.disabled.is_empty() && self.pattern_overrides.is_empty() && self.step_order.is_empty()
+        self.disabled.is_empty()
+            && self.pattern_overrides.is_empty()
+            && self.step_order.is_empty()
+            && self.custom_steps.is_empty()
     }
 }
 
@@ -210,6 +217,46 @@ mod tests {
         let mut sc = StepsConfig::default();
         assert!(sc.is_empty());
         sc.step_order = vec!["na_check".to_string()];
+        assert!(!sc.is_empty());
+    }
+
+    #[test]
+    fn test_custom_steps_roundtrip() {
+        let toml_str = r#"
+[[steps.custom_steps]]
+type = "extract"
+label = "custom_po_box_digits"
+pattern = '\bBOX (\d+)'
+target = "po_box"
+skip_if_filled = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.steps.custom_steps.len(), 1);
+        assert_eq!(config.steps.custom_steps[0].label, "custom_po_box_digits");
+
+        let serialized = config.to_toml();
+        assert!(serialized.contains("custom_po_box_digits"));
+        let parsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(parsed.steps.custom_steps.len(), 1);
+    }
+
+    #[test]
+    fn test_custom_steps_empty_not_serialized() {
+        let config = Config::default();
+        let toml_str = config.to_toml();
+        assert!(!toml_str.contains("custom_steps"));
+    }
+
+    #[test]
+    fn test_steps_config_is_empty_with_custom_steps() {
+        let mut sc = StepsConfig::default();
+        assert!(sc.is_empty());
+        sc.custom_steps = vec![crate::step::StepDef {
+            step_type: "rewrite".to_string(),
+            label: "test".to_string(),
+            pattern: None, table: None, target: None, replacement: None,
+            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
+        }];
         assert!(!sc.is_empty());
     }
 }
