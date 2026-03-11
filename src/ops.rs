@@ -1,7 +1,7 @@
 use fancy_regex::Regex;
 
-/// Extract a pattern from `source`, remove it, and trim whitespace.
-/// Equivalent to R's `extract_remove_squish`.
+/// Extract a pattern from `source`, remove it, trim whitespace,
+/// and clean up any non-word characters left at the boundaries.
 pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<String> {
     let m = pattern.find(source.as_str()).ok()??;
     let extracted = m.as_str().to_string();
@@ -10,6 +10,7 @@ pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<String> {
 
     source.replace_range(start..end, "");
     squish(source);
+    trim_nonword_boundaries(source);
 
     let extracted = extracted.trim().to_string();
     if extracted.is_empty() {
@@ -17,6 +18,17 @@ pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<String> {
     } else {
         Some(extracted)
     }
+}
+
+/// Strip non-word characters (punctuation, symbols) from the start and end of a string.
+/// Preserves internal punctuation — only trims boundaries.
+fn trim_nonword_boundaries(s: &mut String) {
+    let trimmed = s
+        .trim_start_matches(|c: char| !c.is_alphanumeric() && !c.is_whitespace())
+        .trim_end_matches(|c: char| !c.is_alphanumeric() && !c.is_whitespace())
+        .to_string();
+    let trimmed = trimmed.trim().to_string();
+    *s = trimmed;
 }
 
 /// Extract a pattern from `source`, replace it with a placeholder tag.
