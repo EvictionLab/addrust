@@ -406,3 +406,84 @@ target = "po_box"
     let addr = p.parse("123 Main St");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
 }
+
+#[test]
+fn test_multiple_ordinals() {
+    // Both ordinal tokens converted: 1ST → FIRST, 2ND → SECOND
+    let p = Pipeline::default();
+    let addr = p.parse("123 1ST AND 2ND ST");
+    let name = addr.street_name.as_deref().unwrap();
+    assert!(name.contains("FIRST"), "Expected FIRST in {:?}", name);
+    assert!(name.contains("SECOND"), "Expected SECOND in {:?}", name);
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+}
+
+#[test]
+fn test_bare_zero_street_number_preserved() {
+    // Street number "0" is a valid address number and must not be stripped
+    let p = Pipeline::default();
+    let addr = p.parse("0 Main St");
+    assert_eq!(addr.street_number.as_deref(), Some("0"));
+    assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+}
+
+#[test]
+fn test_highway_one_extracted_as_street_number() {
+    // "HIGHWAY 1" — no leading street number, so the trailing 1 becomes street_number.
+    // The highway_number_to_word step only fires when there IS a leading address number.
+    // Without context to protect it, the bare "1" after HIGHWAY is consumed as street_number.
+    let p = Pipeline::default();
+    let addr = p.parse("HIGHWAY 1");
+    assert_eq!(addr.street_number.as_deref(), Some("1"));
+    // HIGHWAY remains as street name (no suffix extracted)
+    assert!(addr.street_name.is_none() || addr.street_name.as_deref() == Some("HIGHWAY"));
+}
+
+#[test]
+fn test_county_road_number() {
+    // Trailing "5" after COUNTY ROAD is converted to FIVE by highway_number_to_word.
+    // ROAD is treated as part of the street name here (not extracted as suffix),
+    // because the highway_number_to_word pattern matches the full "COUNTY ROAD N" phrase.
+    let p = Pipeline::default();
+    let addr = p.parse("123 COUNTY ROAD 5");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.street_name.as_deref(), Some("COUNTY ROAD FIVE"));
+    // Suffix is None — ROAD stays embedded in the street name for county road addresses
+    assert!(addr.suffix.is_none());
+}
+
+#[test]
+fn test_ordinal_street() {
+    // Pre-direction, ordinal street name, and suffix all extracted correctly
+    let p = Pipeline::default();
+    let addr = p.parse("123 W 42ND ST");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.pre_direction.as_deref(), Some("W"));
+    assert_eq!(addr.street_name.as_deref(), Some("FORTY SECOND"));
+    assert_eq!(addr.suffix.as_deref(), Some("STREET"));
+}
+
+#[test]
+fn test_source_rewrite_no_side_effects() {
+    // "#007" → hash stripped → "007" → leading zeros stripped → "7"
+    // Unit type is None (bare # unit has no keyword like APT)
+    let p = Pipeline::default();
+    let addr = p.parse("123 Main St #007");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
+    assert_eq!(addr.unit.as_deref(), Some("7"));
+    assert!(addr.unit_type.is_none());
+}
+
+#[test]
+fn test_wisconsin_fraction() {
+    // "8 1/2" fraction in street name converted to "EIGHT AND ONE HALF"
+    let p = Pipeline::default();
+    let addr = p.parse("123 8 1/2 MILE RD");
+    assert_eq!(addr.street_number.as_deref(), Some("123"));
+    assert_eq!(addr.suffix.as_deref(), Some("ROAD"));
+    let name = addr.street_name.as_deref().unwrap_or("");
+    assert!(name.contains("HALF"), "Expected fraction in street_name, got {:?}", name);
+    assert_eq!(addr.street_name.as_deref(), Some("EIGHT AND ONE HALF MILE"));
+}
