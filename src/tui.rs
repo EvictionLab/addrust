@@ -139,16 +139,43 @@ enum GroupStatus {
     Modified,
 }
 
-/// A step with its original and current enabled state.
+/// A step with its current and default state, carrying full definition.
 #[derive(Debug, Clone)]
 struct StepState {
-    label: String,
-    group: String,
-    action_desc: String,
-    pattern_template: String,
     enabled: bool,
     default_enabled: bool,
     is_custom: bool,
+    def: crate::step::StepDef,
+    default_def: Option<crate::step::StepDef>,
+}
+
+impl StepState {
+    fn label(&self) -> &str { &self.def.label }
+    fn step_type(&self) -> &str { &self.def.step_type }
+    fn pattern_template(&self) -> &str {
+        self.def.pattern.as_deref().unwrap_or("")
+    }
+    fn is_modified(&self) -> bool {
+        match &self.default_def {
+            None => false,
+            Some(default) => self.def != *default || self.enabled != self.default_enabled,
+        }
+    }
+    fn is_field_modified(&self, field: &str) -> bool {
+        let Some(default) = &self.default_def else { return false };
+        match field {
+            "pattern" => self.def.pattern != default.pattern,
+            "target" => self.def.target != default.target,
+            "targets" => self.def.targets != default.targets,
+            "replacement" => self.def.replacement != default.replacement,
+            "skip_if_filled" => self.def.skip_if_filled != default.skip_if_filled,
+            "table" => self.def.table != default.table,
+            "source" => self.def.source != default.source,
+            "mode" => self.def.mode != default.mode,
+            "label" => false,
+            _ => false,
+        }
+    }
 }
 
 /// Full TUI application state.
@@ -194,8 +221,6 @@ struct App {
     output_list_state: ListState,
 
     // -- Custom steps --
-    /// Original StepDef for each custom step, keyed by label.
-    custom_step_defs: std::collections::HashMap<String, crate::step::StepDef>,
     /// Wizard accumulator for building a new custom step.
     wizard_acc: WizardAccumulator,
     /// If Some, we're showing delete confirmation for a custom step at this index.
@@ -206,45 +231,73 @@ impl App {
     fn new(config_path: PathBuf) -> Self {
         let config = Config::load(&config_path);
         let default_tables = build_default_tables();
-        let pipeline = Pipeline::from_config(&config);
 
-        // Build step states from step summaries
-        let default_pipeline = Pipeline::default();
-        let default_summaries = default_pipeline.step_summaries();
-        let config_summaries = pipeline.step_summaries();
+        // Parse default step definitions
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let default_defs: crate::step::StepsDef = toml::from_str(toml_str)
+            .expect("Failed to parse default steps.toml");
 
-        // Use label-based lookup for default_enabled (not positional zip)
-        let default_enabled_map: std::collections::HashMap<&str, bool> = default_summaries
-            .iter()
-            .map(|s| (s.label.as_str(), s.enabled))
-            .collect();
+        // Build default StepDef map (before any overrides)
+        let default_def_map: std::collections::HashMap<String, crate::step::StepDef> =
+            default_defs.step.iter()
+                .map(|d| (d.label.clone(), d.clone()))
+                .collect();
 
-        let steps: Vec<StepState> = config_summaries
-            .iter()
-            .map(|current| {
-                let is_custom = !default_enabled_map.contains_key(current.label.as_str());
-                let default_enabled = default_enabled_map
-                    .get(current.label.as_str())
-                    .copied()
-                    .unwrap_or(true);
-                StepState {
-                    label: current.label.clone(),
-                    group: current.step_type.clone(),
-                    action_desc: current.step_type.clone(),
-                    pattern_template: current.pattern_template.clone().unwrap_or_default(),
-                    enabled: current.enabled,
-                    default_enabled,
-                    is_custom,
+        // Build current defs (with overrides applied)
+        let mut current_defs: Vec<crate::step::StepDef> = default_defs.step.clone();
+        for def in &mut current_defs {
+            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
+                def.pattern = Some(override_pattern.clone());
+            }
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                step_override.apply_to(def);
+            }
+        }
+
+        // Append custom steps
+        for custom_def in &config.steps.custom_steps {
+            let mut def = custom_def.clone();
+            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
+                def.pattern = Some(override_pattern.clone());
+            }
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                step_override.apply_to(&mut def);
+            }
+            current_defs.push(def);
+        }
+
+        // Apply step_order reordering (same logic as pipeline.rs)
+        if !config.steps.step_order.is_empty() {
+            let order = &config.steps.step_order;
+            let pos_map: std::collections::HashMap<&str, usize> = order
+                .iter().enumerate().map(|(i, label)| (label.as_str(), i)).collect();
+            let mut ordered = Vec::new();
+            let mut unordered = Vec::new();
+            for def in current_defs {
+                if let Some(&pos) = pos_map.get(def.label.as_str()) {
+                    ordered.push((pos, def));
+                } else {
+                    unordered.push(def);
                 }
-            })
-            .collect();
+            }
+            ordered.sort_by_key(|(pos, _)| *pos);
+            current_defs = ordered.into_iter().map(|(_, d)| d).collect();
+            current_defs.extend(unordered);
+        }
 
-        let custom_step_defs: std::collections::HashMap<String, crate::step::StepDef> = config
-            .steps
-            .custom_steps
-            .iter()
-            .map(|d| (d.label.clone(), d.clone()))
-            .collect();
+        // Build StepState vec
+        let steps: Vec<StepState> = current_defs.iter().map(|def| {
+            let is_custom = !default_def_map.contains_key(&def.label);
+            let default_enabled = true;
+            let enabled = !config.steps.disabled.contains(&def.label);
+            StepState {
+                enabled,
+                default_enabled,
+                is_custom,
+                def: def.clone(),
+                default_def: default_def_map.get(&def.label).cloned(),
+            }
+        }).collect();
 
         let mut steps_list_state = ListState::default();
         if !steps.is_empty() {
@@ -405,7 +458,6 @@ impl App {
             input_mode: InputMode::Normal,
             output_settings,
             output_list_state,
-            custom_step_defs,
             wizard_acc: WizardAccumulator::default(),
             confirm_delete: None,
         }
@@ -415,59 +467,67 @@ impl App {
     fn to_config(&self) -> Config {
         let mut config = Config::default();
 
-        // Steps: collect individually disabled labels
-        let disabled: Vec<String> = self
-            .steps
-            .iter()
-            .filter(|r| !r.enabled && r.default_enabled)
-            .map(|r| r.label.clone())
-            .collect();
-        config.steps.disabled = disabled;
+        let mut disabled = Vec::new();
+        let mut step_overrides = HashMap::new();
+        let mut custom_steps = Vec::new();
 
-        // Pattern overrides: compare by label (not position) since steps may be reordered
-        let default_pipeline = Pipeline::default();
-        let default_summaries = default_pipeline.step_summaries();
-        let default_patterns: std::collections::HashMap<&str, &str> = default_summaries
-            .iter()
-            .map(|s| (s.label.as_str(), s.pattern_template.as_deref().unwrap_or("")))
-            .collect();
+        // Parse default step order for comparison
+        let toml_str = include_str!("../data/defaults/steps.toml");
+        let default_defs: crate::step::StepsDef = toml::from_str(toml_str).unwrap();
+        let default_order: Vec<&str> = default_defs.step.iter().map(|d| d.label.as_str()).collect();
 
         for step in &self.steps {
+            if !step.enabled && step.default_enabled {
+                disabled.push(step.label().to_string());
+            }
+
             if step.is_custom {
-                continue; // Custom step patterns stored in custom_steps, not overrides
-            }
-            let default_template = default_patterns
-                .get(step.label.as_str())
-                .copied()
-                .unwrap_or("");
-            if step.pattern_template != default_template {
-                config.steps.pattern_overrides.insert(
-                    step.label.clone(),
-                    step.pattern_template.clone(),
-                );
-            }
-        }
-
-        // Custom steps: serialize in current step order
-        config.steps.custom_steps = self
-            .steps
-            .iter()
-            .filter(|s| s.is_custom)
-            .filter_map(|s| {
-                let mut def = self.custom_step_defs.get(&s.label)?.clone();
-                if !s.pattern_template.is_empty() {
-                    def.pattern = Some(s.pattern_template.clone());
+                custom_steps.push(step.def.clone());
+            } else if let Some(default) = &step.default_def {
+                // Diff against default, produce StepOverride with only changed fields
+                let mut ovr = crate::config::StepOverride::default();
+                let mut has_changes = false;
+                if step.def.pattern != default.pattern {
+                    ovr.pattern = step.def.pattern.clone(); has_changes = true;
                 }
-                Some(def)
-            })
-            .collect();
-
-        // Step order: only store if different from default
-        let default_order: Vec<&str> = default_summaries.iter().map(|s| s.label.as_str()).collect();
-        let current_order: Vec<&str> = self.steps.iter().map(|s| s.label.as_str()).collect();
-        if current_order != default_order {
-            config.steps.step_order = self.steps.iter().map(|s| s.label.clone()).collect();
+                if step.def.target != default.target {
+                    ovr.target = step.def.target.clone(); has_changes = true;
+                }
+                if step.def.targets != default.targets {
+                    ovr.targets = step.def.targets.clone(); has_changes = true;
+                }
+                if step.def.replacement != default.replacement {
+                    ovr.replacement = step.def.replacement.clone(); has_changes = true;
+                }
+                if step.def.skip_if_filled != default.skip_if_filled {
+                    ovr.skip_if_filled = step.def.skip_if_filled; has_changes = true;
+                }
+                if step.def.table != default.table {
+                    ovr.table = step.def.table.clone(); has_changes = true;
+                }
+                if step.def.source != default.source {
+                    ovr.source = step.def.source.clone(); has_changes = true;
+                }
+                if step.def.mode != default.mode {
+                    ovr.mode = step.def.mode.clone(); has_changes = true;
+                }
+                if has_changes {
+                    step_overrides.insert(step.label().to_string(), ovr);
+                }
+            }
         }
+
+        // Only emit step_order if it differs from default
+        let current_order: Vec<&str> = self.steps.iter().map(|s| s.label()).collect();
+        let emit_order = current_order != default_order;
+
+        config.steps = crate::config::StepsConfig {
+            disabled,
+            pattern_overrides: HashMap::new(), // no longer written; read-only for backward compat
+            step_overrides,
+            step_order: if emit_order { self.steps.iter().map(|s| s.label().to_string()).collect() } else { Vec::new() },
+            custom_steps,
+        };
 
         // Dictionaries: collect changes per table
         for (i, name) in self.table_names.iter().enumerate() {
@@ -592,9 +652,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             if let Some(del_idx) = app.confirm_delete {
                 match key.code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
-                        let label = app.steps[del_idx].label.clone();
                         app.steps.remove(del_idx);
-                        app.custom_step_defs.remove(&label);
                         let len = app.steps.len();
                         if len == 0 {
                             app.steps_list_state.select(None);
@@ -734,7 +792,7 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Enter => {
             if let Some(i) = app.steps_list_state.selected() {
-                let segments = crate::pattern::parse_pattern(&app.steps[i].pattern_template);
+                let segments = crate::pattern::parse_pattern(app.steps[i].pattern_template());
                 app.step_detail_index = Some(i);
                 app.step_detail_segments = segments;
                 app.step_detail_selected = 0;
@@ -836,7 +894,7 @@ fn handle_step_detail_key(app: &mut App, code: KeyCode) {
         // Edit the full pattern template
         KeyCode::Char('e') => {
             if let Some(step_idx) = app.step_detail_index {
-                let template = app.steps[step_idx].pattern_template.clone();
+                let template = app.steps[step_idx].pattern_template().to_string();
                 let len = template.len();
                 app.input_mode = InputMode::EditPattern(template, len, None);
             }
@@ -853,11 +911,11 @@ fn handle_step_detail_key(app: &mut App, code: KeyCode) {
                         return;
                     }
                     alternatives[alt_idx].enabled = !alternatives[alt_idx].enabled;
-                    // Update the step's pattern_template from the modified segments
+                    // Update the step's pattern from the modified segments
                     let new_template =
                         crate::pattern::rebuild_pattern(&app.step_detail_segments);
                     if let Some(step_idx) = app.step_detail_index {
-                        app.steps[step_idx].pattern_template = new_template;
+                        app.steps[step_idx].def.pattern = Some(new_template);
                     }
                     app.dirty = true;
                 }
@@ -1189,9 +1247,9 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                         Ok(()) => {
                             let new_template = text.clone();
                             if let Some(step_idx) = app.step_detail_index {
-                                app.steps[step_idx].pattern_template = new_template;
+                                app.steps[step_idx].def.pattern = Some(new_template);
                                 app.step_detail_segments = crate::pattern::parse_pattern(
-                                    &app.steps[step_idx].pattern_template,
+                                    app.steps[step_idx].pattern_template(),
                                 );
                                 app.step_detail_selected = 0;
                                 app.step_detail_alt_selected = None;
@@ -1594,7 +1652,7 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                 false,
             ) {
                 if label.is_empty() { return; }
-                if app.steps.iter().any(|s| s.label == label) { return; }
+                if app.steps.iter().any(|s| s.label() == label) { return; }
 
                 let acc = &app.wizard_acc;
                 let def = crate::step::StepDef {
@@ -1613,18 +1671,15 @@ fn handle_wizard_key(app: &mut App, code: KeyCode) {
                 };
 
                 let step_state = StepState {
-                    label: label.clone(),
-                    group: acc.step_type.clone(),
-                    action_desc: acc.step_type.clone(),
-                    pattern_template: acc.pattern.clone(),
                     enabled: true,
                     default_enabled: true,
                     is_custom: true,
+                    def: def,
+                    default_def: None,
                 };
 
                 app.steps.insert(insert_idx, step_state);
                 app.steps_list_state.select(Some(insert_idx));
-                app.custom_step_defs.insert(label, def);
                 app.dirty = true;
                 app.input_mode = InputMode::Normal;
             }
@@ -1777,7 +1832,7 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Delete confirmation overlay
     if let Some(del_idx) = app.confirm_delete {
         if del_idx < app.steps.len() {
-            let label = &app.steps[del_idx].label;
+            let label = app.steps[del_idx].label();
             let popup_area = centered_rect(50, 5, frame.area());
             let popup = Paragraph::new(format!("Delete custom step '{}'? (y/n)", label))
                 .block(Block::bordered().title("Confirm Delete"))
@@ -1823,15 +1878,15 @@ fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
                 Style::new().fg(Color::DarkGray)
             };
             let label_display = if r.is_custom {
-                format!("[+] {:27} ", r.label)
+                format!("[+] {:27} ", r.label())
             } else {
-                format!("{:30} ", r.label)
+                format!("{:30} ", r.label())
             };
             ListItem::new(Line::from(vec![
                 Span::styled(format!("[{}] ", check), check_style),
                 Span::styled(label_display, style),
-                Span::styled(format!("{:8} ", r.action_desc), if is_moving { style } else { Style::new().fg(Color::DarkGray) }),
-                Span::styled(&r.pattern_template, pattern_style),
+                Span::styled(format!("{:8} ", r.step_type()), if is_moving { style } else { Style::new().fg(Color::DarkGray) }),
+                Span::styled(r.pattern_template(), pattern_style),
             ]))
         })
         .collect();
@@ -1863,10 +1918,9 @@ fn render_step_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
 
     // Header: step name, type, action, enabled status
     let header_text = format!(
-        " {}  |  group: {}  |  action: {}  |  {}",
-        step.label,
-        step.group,
-        step.action_desc,
+        " {}  |  type: {}  |  {}",
+        step.label(),
+        step.step_type(),
         if step.enabled { "enabled" } else { "DISABLED" },
     );
 
@@ -1898,15 +1952,15 @@ fn render_step_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::R
         }
     } else {
         header_lines.push(Line::from(Span::styled(
-            format!(" Pattern: {}  (e to edit)", step.pattern_template),
+            format!(" Pattern: {}  (e to edit)", step.pattern_template()),
             Style::new().fg(Color::DarkGray),
         )));
     }
 
     let title = if is_editing {
-        format!("Step: {} (Enter: confirm, Esc: cancel)", step.label)
+        format!("Step: {} (Enter: confirm, Esc: cancel)", step.label())
     } else {
-        format!("Step: {} (Esc to go back)", step.label)
+        format!("Step: {} (Esc to go back)", step.label())
     };
     let header = Paragraph::new(header_lines)
         .block(Block::bordered().title(title));
@@ -2490,7 +2544,7 @@ mod tests {
         if !app.steps.is_empty() {
             app.steps[0].enabled = false;
             let config = app.to_config();
-            assert!(config.steps.disabled.contains(&app.steps[0].label));
+            assert!(config.steps.disabled.contains(&app.steps[0].label().to_string()));
         }
     }
 
@@ -2531,23 +2585,24 @@ mod tests {
     }
 
     #[test]
-    fn test_to_config_pattern_override() {
+    fn test_to_config_step_override() {
         let mut app = App::new(PathBuf::from("nonexistent.toml"));
         if !app.steps.is_empty() {
-            // Modify a step's pattern template
-            let original = app.steps[0].pattern_template.clone();
-            app.steps[0].pattern_template = "MODIFIED_PATTERN".to_string();
+            let label = app.steps[0].label().to_string();
+            // Modify a step's pattern
+            let original = app.steps[0].def.pattern.clone();
+            app.steps[0].def.pattern = Some("MODIFIED_PATTERN".to_string());
             let config = app.to_config();
-            assert!(config.steps.pattern_overrides.contains_key(&app.steps[0].label));
+            assert!(config.steps.step_overrides.contains_key(&label));
             assert_eq!(
-                config.steps.pattern_overrides.get(&app.steps[0].label).unwrap(),
-                "MODIFIED_PATTERN"
+                config.steps.step_overrides.get(&label).unwrap().pattern.as_deref(),
+                Some("MODIFIED_PATTERN")
             );
 
             // Restore to default — should NOT appear in overrides
-            app.steps[0].pattern_template = original;
+            app.steps[0].def.pattern = original;
             let config = app.to_config();
-            assert!(!config.steps.pattern_overrides.contains_key(&app.steps[0].label));
+            assert!(!config.steps.step_overrides.contains_key(&label));
         }
     }
 
