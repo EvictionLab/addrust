@@ -179,41 +179,38 @@ pub(crate) const TABLE_DESCRIPTIONS: &[(&str, &str)] = &[
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn visible_fields_for_type(step_type: &str, def: &crate::step::StepDef) -> Vec<FormField> {
-    match step_type {
-        "extract" => {
-            let mut fields = vec![FormField::Pattern, FormField::OutputCol];
-            fields.push(FormField::SkipIfFilled);
-            fields.push(FormField::Replacement);
-            fields.push(FormField::InputCol);
-            fields.push(FormField::Label);
-            fields
-        }
-        "rewrite" => {
-            let mut fields = vec![FormField::Pattern];
-            if def.table.is_some() {
-                fields.push(FormField::Table);
-            } else {
-                fields.push(FormField::Replacement);
-            }
-            fields.push(FormField::InputCol);
-            fields.push(FormField::Label);
-            fields
-        }
-        "standardize" => {
-            let mut fields = vec![];
-            if def.pattern.is_some() {
-                fields.push(FormField::Pattern);
-                fields.push(FormField::Replacement);
-            } else {
-                fields.push(FormField::Table);
-            }
-            fields.push(FormField::OutputCol);
-            fields.push(FormField::Mode);
-            fields.push(FormField::Label);
-            fields
-        }
-        _ => vec![FormField::Label],
+pub(crate) fn visible_fields_for_type(step_type: &str, _def: &crate::step::StepDef) -> Vec<FormField> {
+    match super::meta::find_step_type(step_type) {
+        Some(meta) => meta.visible.iter().map(|pk| prop_key_to_form_field(*pk)).collect(),
+        None => vec![FormField::Label],
+    }
+}
+
+fn prop_key_to_form_field(pk: super::meta::PropKey) -> FormField {
+    use super::meta::PropKey;
+    match pk {
+        PropKey::Pattern => FormField::Pattern,
+        PropKey::Table => FormField::Table,
+        PropKey::OutputCol => FormField::OutputCol,
+        PropKey::Replacement => FormField::Replacement,
+        PropKey::SkipIfFilled => FormField::SkipIfFilled,
+        PropKey::Mode => FormField::Mode,
+        PropKey::InputCol => FormField::InputCol,
+        PropKey::Label => FormField::Label,
+    }
+}
+
+fn form_field_to_prop_key(f: FormField) -> super::meta::PropKey {
+    use super::meta::PropKey;
+    match f {
+        FormField::Pattern => PropKey::Pattern,
+        FormField::Table => PropKey::Table,
+        FormField::OutputCol => PropKey::OutputCol,
+        FormField::Replacement => PropKey::Replacement,
+        FormField::SkipIfFilled => PropKey::SkipIfFilled,
+        FormField::Mode => PropKey::Mode,
+        FormField::InputCol => PropKey::InputCol,
+        FormField::Label => PropKey::Label,
     }
 }
 
@@ -315,25 +312,9 @@ pub(crate) fn render_text_with_cursor(text: &str, cursor: usize) -> String {
 }
 
 pub(crate) fn validate_step_def(def: &crate::step::StepDef) -> bool {
-    match def.step_type.as_str() {
-        "extract" => {
-            def.pattern.is_some()
-                && match &def.output_col {
-                    Some(OutputCol::Single(_)) => true,
-                    Some(OutputCol::Multi(m)) => !m.is_empty(),
-                    None => false,
-                }
-        }
-        "rewrite" => {
-            def.pattern.is_some()
-                && (def.replacement.is_some() || def.table.is_some())
-        }
-        "standardize" => {
-            def.output_col.is_some()
-                && (def.table.is_some() || (def.pattern.is_some() && def.replacement.is_some()))
-        }
-        _ => false,
-    }
+    super::meta::find_step_type(&def.step_type)
+        .map(|m| (m.required)(def))
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1538,34 +1519,31 @@ fn render_form_help_panel(
     step_state: Option<&StepState>,
     area: Rect,
 ) {
-    let (title, help_text, current_value, edit_hint): (&str, &str, String, &str) = match field {
+    let help = super::meta::help_text(form_field_to_prop_key(field));
+
+    let (title, current_value, edit_hint): (&str, String, &str) = match field {
         FormField::SkipIfFilled => (
             "Skip If Filled",
-            "When yes, this step is skipped if the target field(s) already have a value from a previous step.\n\nUse this for extraction steps that should only fire once.",
             (if def.skip_if_filled == Some(true) { "yes" } else { "no" }).to_string(),
             "Space to toggle",
         ),
         FormField::Replacement => (
             "Replacement",
-            "Text that replaces the matched pattern. Supports backreferences:\n\n  $1        - capture group 1\n  ${N:table} - look up group N in a table\n  ${N/M:fraction} - fraction (group N / group M)",
             def.replacement.as_deref().unwrap_or("(none)").to_string(),
             "Enter to edit",
         ),
         FormField::InputCol => (
             "Input Column",
-            "Which text this step operates on.\n\n'working string' is the main address being parsed. Selecting a field makes the step operate on that extracted field instead.",
             def.input_col.as_deref().unwrap_or("working string").to_string(),
             "Enter to pick",
         ),
         FormField::Mode => (
             "Mode",
-            "'Whole field' standardizes the entire field value as one lookup.\n\n'Per word' splits on spaces and standardizes each word independently.",
             def.mode.as_deref().unwrap_or("whole field").to_string(),
             "Space to toggle",
         ),
         FormField::Label => (
             "Label",
-            "Unique identifier for this step. Used in config files for overrides, ordering, and disable lists.",
             def.label.clone(),
             "Enter to edit",
         ),
@@ -1579,10 +1557,12 @@ fn render_form_help_panel(
                 }
                 None => "(none)".to_string(),
             };
-            ("Output Column", "The address field(s) where the extracted value is stored.", val, "Enter to pick")
+            ("Output Column", val, "Enter to pick")
         }
         _ => return,
     };
+
+    let help_text = help;
 
     let is_modified = step_state.map(|s| s.is_field_modified(field_key(field))).unwrap_or(false);
 
