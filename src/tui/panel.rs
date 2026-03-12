@@ -145,9 +145,9 @@ fn step_field_display(field: StepField, def: &StepDef) -> (&'static str, String)
 }
 
 /// Whether a field uses dropdown (vs inline edit).
+/// Only column pickers are dropdowns. Pattern/Table are inline text edits.
 fn is_dropdown_field(field: StepField) -> bool {
-    matches!(field, StepField::Pattern | StepField::Table
-        | StepField::OutputCol | StepField::InputCol)
+    matches!(field, StepField::OutputCol | StepField::InputCol)
 }
 
 /// Render the step editor panel overlay.
@@ -481,6 +481,8 @@ fn handle_step_navigating(app: &mut App, code: KeyCode) {
             } else {
                 let value = match field {
                     StepField::Label => panel.def.label.clone(),
+                    StepField::Pattern => panel.def.pattern.clone().unwrap_or_default(),
+                    StepField::Table => panel.def.table.clone().unwrap_or_default(),
                     StepField::Replacement => panel.def.replacement.clone().unwrap_or_default(),
                     _ => return,
                 };
@@ -537,6 +539,12 @@ fn handle_step_inline_edit(app: &mut App, code: KeyCode) {
                 let field = panel.visible_fields[panel.field_cursor];
                 match field {
                     StepField::Label => if !value.is_empty() { panel.def.label = value },
+                    StepField::Pattern => {
+                        panel.def.pattern = if value.is_empty() { None } else { Some(value) };
+                        panel.pattern_segments = crate::pattern::parse_pattern(
+                            panel.def.pattern.as_deref().unwrap_or(""));
+                    }
+                    StepField::Table => panel.def.table = if value.is_empty() { None } else { Some(value) },
                     StepField::Replacement => panel.def.replacement = if value.is_empty() { None } else { Some(value) },
                     _ => {}
                 }
