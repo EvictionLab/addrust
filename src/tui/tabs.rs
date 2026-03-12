@@ -2,7 +2,7 @@ use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Wrap};
 use ratatui::Frame;
 
 use crate::address::COL_DEFS;
@@ -123,9 +123,6 @@ pub(crate) struct StepState {
 impl StepState {
     pub(crate) fn label(&self) -> &str { &self.def.label }
     pub(crate) fn step_type(&self) -> &str { &self.def.step_type }
-    pub(crate) fn pattern_template(&self) -> &str {
-        self.def.pattern.as_deref().unwrap_or("")
-    }
     pub(crate) fn is_modified(&self) -> bool {
         match &self.default_def {
             None => false,
@@ -162,18 +159,7 @@ pub(crate) enum TextEditResult {
 // Constants
 // ---------------------------------------------------------------------------
 
-pub(crate) const TABLE_DESCRIPTIONS: &[(&str, &str)] = &[
-    ("direction", "N/S/E/W, NORTH/SOUTH/EAST/WEST"),
-    ("unit_type", "APT/SUITE/UNIT etc."),
-    ("unit_location", "FRONT/REAR/BASEMENT etc."),
-    ("suffix_all", "All suffix variants (AVE/AV/AVEN -> AVENUE)"),
-    ("suffix_common", "Common suffixes only"),
-    ("state", "State abbreviations"),
-    ("street_name_abbr", "Street name abbreviations (MT->MOUNT)"),
-    ("na_values", "NA/N/A values"),
-    ("number_cardinal", "1->ONE, 42->FORTYTWO"),
-    ("number_ordinal", "1->FIRST, 42->FORTYSECOND"),
-];
+use super::meta::TABLE_DESCRIPTIONS;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1118,13 +1104,14 @@ fn handle_form_text_edit(app: &mut App, code: KeyCode) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app
+    use super::widgets;
+
+    let rows: Vec<Row> = app
         .steps
         .iter()
         .enumerate()
         .map(|(idx, r)| {
             let is_moving = app.moving_step == Some(idx);
-            let check = if r.enabled { " " } else { "x" };
             let style = if is_moving {
                 Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else if !r.enabled {
@@ -1134,42 +1121,87 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 Style::new()
             };
-            let check_style = if is_moving {
-                Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+
+            // Enabled indicator
+            let check = if is_moving {
+                Span::styled("~", Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD))
             } else if r.enabled {
-                Style::new().fg(Color::Green)
+                Span::styled("✓", Style::new().fg(Color::Green))
             } else {
-                Style::new().fg(Color::Red)
+                Span::styled("✗", Style::new().fg(Color::Red))
             };
-            let pattern_style = if is_moving {
-                Style::new().fg(Color::Yellow)
+
+            // Label (with custom marker)
+            let label = if r.is_custom {
+                format!("[+] {}", r.label())
             } else {
-                Style::new().fg(Color::DarkGray)
+                r.label().to_string()
             };
-            let label_display = if r.is_custom {
-                format!("[+] {:27} ", r.label())
+
+            // Type — capitalize via meta lookup
+            let type_display = super::meta::find_step_type(r.step_type())
+                .map(|m| m.display)
+                .unwrap_or(r.step_type());
+
+            // Input column
+            let input = r.def.input_col.as_deref().unwrap_or("(working)");
+
+            // Output column
+            let output = match &r.def.output_col {
+                Some(OutputCol::Single(name)) => name.clone(),
+                Some(OutputCol::Multi(map)) => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by_key(|(_, v)| *v);
+                    pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ")
+                }
+                None => "\u{2014}".to_string(), // em-dash
+            };
+
+            // Pattern/table (truncated)
+            let pattern = if let Some(tbl) = &r.def.table {
+                format!("{{{}}}", tbl)
             } else {
-                format!("{:30} ", r.label())
+                r.def.pattern.as_deref().unwrap_or("").to_string()
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("[{}] ", check), check_style),
-                Span::styled(label_display, style),
-                Span::styled(format!("{:8} ", r.step_type()), if is_moving { style } else { Style::new().fg(Color::DarkGray) }),
-                Span::styled(r.pattern_template(), pattern_style),
-            ]))
+            let pattern_truncated = widgets::truncate(&pattern, 30);
+
+            Row::new(vec![
+                Cell::from(Line::from(check)),
+                Cell::from(label).style(style),
+                Cell::from(type_display),
+                Cell::from(input.to_string()),
+                Cell::from(output),
+                Cell::from(pattern_truncated).style(
+                    if is_moving { style } else { Style::new().fg(Color::DarkGray) }
+                ),
+            ])
         })
         .collect();
 
-    let list = List::new(items)
-        .block(Block::bordered().title("Pipeline Rules"))
-        .highlight_style(
+    let header = Row::new(vec!["", "Label", "Type", "Input", "Output", "Pattern"])
+        .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .bottom_margin(1);
+
+    let widths = [
+        Constraint::Length(1),   // check
+        Constraint::Min(16),     // label
+        Constraint::Length(11),  // type
+        Constraint::Length(12),  // input
+        Constraint::Length(14),  // output
+        Constraint::Fill(1),     // pattern (remaining)
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::bordered().title("Pipeline Steps"))
+        .row_highlight_style(
             Style::new()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, area, &mut app.steps_list_state);
+    frame.render_stateful_widget(table, area, &mut app.steps_list_state);
 }
 
 pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -1410,6 +1442,8 @@ pub(crate) fn render_step_form(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_form_left_panel(frame: &mut Frame, app: &App, area: Rect) {
+    use super::widgets;
+
     let form = app.form_state.as_ref().unwrap();
     let step_state = form.step_index.map(|i| &app.steps[i]);
 
@@ -1423,11 +1457,7 @@ fn render_form_left_panel(frame: &mut Frame, app: &App, area: Rect) {
         let mod_marker = if is_modified { "* " } else { "  " };
         let (label, value) = form_field_display(*field, &form.def);
 
-        let style = if is_selected {
-            Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(Color::DarkGray)
-        };
+        let style = widgets::selected_style(is_selected).fg(if is_selected { Color::White } else { Color::DarkGray });
 
         let mod_style = if is_modified {
             Style::new().fg(Color::Yellow)
@@ -1445,11 +1475,7 @@ fn render_form_left_panel(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items)
         .block(Block::bordered().border_style(
-            if form.focus == FormFocus::Left {
-                Style::new().fg(Color::Cyan)
-            } else {
-                Style::new().fg(Color::DarkGray)
-            }
+            widgets::focus_border(form.focus == FormFocus::Left)
         ));
     frame.render_widget(list, area);
 }
@@ -1508,7 +1534,7 @@ fn render_form_text_edit_panel(
         ]),
     ];
     let panel = Paragraph::new(lines)
-        .block(Block::bordered().border_style(Style::new().fg(Color::Cyan)));
+        .block(Block::bordered().border_style(super::widgets::focus_border(true)));
     frame.render_widget(panel, area);
 }
 
@@ -1624,7 +1650,7 @@ fn render_form_help_panel(
 
     let panel = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
+        .block(Block::bordered().border_style(super::widgets::focus_border(false)));
     frame.render_widget(panel, area);
 }
 
@@ -1713,7 +1739,7 @@ fn render_form_pattern_panel(frame: &mut Frame, app: &App, area: Rect) {
         Block::bordered()
             .title("Pattern")
             .title_bottom(hints)
-            .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+            .border_style(super::widgets::focus_border(focused))
     );
     frame.render_widget(list, area);
 }
@@ -1756,7 +1782,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: Rect) {
                 Block::bordered()
                     .title("Targets")
                     .title_bottom("Space: toggle  1-9: set group  d: remove  Esc: back")
-                    .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+                    .border_style(super::widgets::focus_border(focused))
             );
             frame.render_widget(list, area);
         }
@@ -1810,7 +1836,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: Rect) {
                 Block::bordered()
                     .title(title)
                     .title_bottom("Enter: select  Esc: back")
-                    .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+                    .border_style(super::widgets::focus_border(focused))
             );
             frame.render_widget(list, area);
         }
@@ -1846,7 +1872,7 @@ fn render_form_table_panel(frame: &mut Frame, app: &App, area: Rect) {
         Block::bordered()
             .title("Table")
             .title_bottom("Enter: select  Esc: back")
-            .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+            .border_style(super::widgets::focus_border(focused))
     );
     frame.render_widget(list, area);
 }

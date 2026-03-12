@@ -45,7 +45,7 @@ pub(crate) struct App {
 
     // -- Rules tab --
     pub(crate) steps: Vec<StepState>,
-    pub(crate) steps_list_state: ratatui::widgets::ListState,
+    pub(crate) steps_list_state: ratatui::widgets::TableState,
     /// If Some, we're in move mode — value is the index of the step being moved.
     pub(crate) moving_step: Option<usize>,
     /// Original index before move started, for Esc cancel.
@@ -136,7 +136,7 @@ impl App {
             }
         }).collect();
 
-        let mut steps_list_state = ratatui::widgets::ListState::default();
+        let mut steps_list_state = ratatui::widgets::TableState::default();
         if !steps.is_empty() {
             steps_list_state.select(Some(0));
         }

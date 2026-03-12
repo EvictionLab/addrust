@@ -65,3 +65,16 @@ pub fn find_step_type(name: &str) -> Option<&'static StepTypeMeta> {
 pub fn help_text(key: PropKey) -> &'static str {
     PROP_HELP.iter().find(|p| p.0 == key).map(|p| p.1).unwrap_or("")
 }
+
+pub const TABLE_DESCRIPTIONS: &[(&str, &str)] = &[
+    ("direction", "N/S/E/W, NORTH/SOUTH/EAST/WEST"),
+    ("unit_type", "APT/SUITE/UNIT etc."),
+    ("unit_location", "FRONT/REAR/BASEMENT etc."),
+    ("suffix_all", "All suffix variants (AVE/AV/AVEN -> AVENUE)"),
+    ("suffix_common", "Common suffixes only"),
+    ("state", "State abbreviations"),
+    ("street_name_abbr", "Street name abbreviations (MT->MOUNT)"),
+    ("na_values", "NA/N/A values"),
+    ("number_cardinal", "1->ONE, 42->FORTYTWO"),
+    ("number_ordinal", "1->FIRST, 42->FORTYSECOND"),
+];
