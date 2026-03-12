@@ -1,40 +1,20 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PropKey {
-    Pattern,
-    Table,
-    OutputCol,
-    Replacement,
-    SkipIfFilled,
-    Mode,
-    InputCol,
-    Label,
-}
-
 pub struct StepTypeMeta {
     pub name: &'static str,
     pub display: &'static str,
-    pub visible: &'static [PropKey],
 }
 
 pub const STEP_TYPES: &[StepTypeMeta] = &[
     StepTypeMeta {
         name: "extract",
         display: "Extract",
-        visible: &[PropKey::Pattern, PropKey::Table, PropKey::OutputCol,
-                   PropKey::SkipIfFilled, PropKey::Replacement, PropKey::InputCol,
-                   PropKey::Label],
     },
     StepTypeMeta {
         name: "rewrite",
         display: "Rewrite",
-        visible: &[PropKey::Pattern, PropKey::Table, PropKey::Replacement,
-                   PropKey::InputCol, PropKey::Label],
     },
     StepTypeMeta {
         name: "standardize",
         display: "Standardize",
-        visible: &[PropKey::Pattern, PropKey::Table, PropKey::Replacement,
-                   PropKey::OutputCol, PropKey::Mode, PropKey::Label],
     },
 ];
 

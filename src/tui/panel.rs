@@ -8,7 +8,7 @@ use ratatui::Frame;
 use crate::address::COL_DEFS;
 use crate::step::{OutputCol, StepDef};
 
-use super::meta::{self, PropKey, TABLE_DESCRIPTIONS};
+use super::meta::{self, TABLE_DESCRIPTIONS};
 use super::widgets;
 use super::App;
 
@@ -101,24 +101,18 @@ pub(crate) fn centered_overlay(area: Rect, content_lines: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-/// Compute visible fields for a step type.
-/// Falls back to "extract" if step_type is empty or unknown.
-pub(crate) fn visible_fields_for_type(step_type: &str) -> Vec<StepField> {
-    let effective = if step_type.is_empty() { "extract" } else { step_type };
-    let meta = meta::find_step_type(effective);
-    match meta {
-        Some(m) => m.visible.iter().filter_map(|pk| match pk {
-            PropKey::Label => Some(StepField::Label),
-            PropKey::Pattern => Some(StepField::Pattern),
-            PropKey::Table => Some(StepField::Table),
-            PropKey::OutputCol => Some(StepField::OutputCol),
-            PropKey::SkipIfFilled => Some(StepField::SkipIfFilled),
-            PropKey::Replacement => Some(StepField::Replacement),
-            PropKey::InputCol => Some(StepField::InputCol),
-            PropKey::Mode => Some(StepField::Mode),
-        }).collect(),
-        None => vec![StepField::Label, StepField::Pattern, StepField::Replacement],
-    }
+/// All fields visible on every step type.
+pub(crate) fn visible_fields_for_type(_step_type: &str) -> Vec<StepField> {
+    vec![
+        StepField::Label,
+        StepField::Pattern,
+        StepField::Table,
+        StepField::OutputCol,
+        StepField::InputCol,
+        StepField::Replacement,
+        StepField::SkipIfFilled,
+        StepField::Mode,
+    ]
 }
 
 /// Get display label and current value for a step field.
