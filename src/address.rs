@@ -13,6 +13,9 @@ pub struct Address {
     pub building: Option<String>,
     pub extra_front: Option<String>,
     pub extra_back: Option<String>,
+    pub city: Option<String>,
+    pub state: Option<String>,
+    pub zip: Option<String>,
     pub warnings: Vec<String>,
 }
 
@@ -70,6 +73,9 @@ impl Address {
             Col::Building => &mut self.building,
             Col::ExtraFront => &mut self.extra_front,
             Col::ExtraBack => &mut self.extra_back,
+            Col::City => &mut self.city,
+            Col::State => &mut self.state,
+            Col::Zip => &mut self.zip,
         }
     }
 
@@ -87,6 +93,9 @@ impl Address {
             Col::Building => &self.building,
             Col::ExtraFront => &self.extra_front,
             Col::ExtraBack => &self.extra_back,
+            Col::City => &self.city,
+            Col::State => &self.state,
+            Col::Zip => &self.zip,
         }
     }
 }
@@ -105,6 +114,49 @@ pub enum Col {
     Building,
     ExtraFront,
     ExtraBack,
+    City,
+    State,
+    Zip,
+}
+
+pub struct ColDef {
+    pub col: Col,
+    pub key: &'static str,
+    pub label: &'static str,
+}
+
+pub const COL_DEFS: &[ColDef] = &[
+    ColDef { col: Col::StreetNumber,  key: "street_number",  label: "Street Number" },
+    ColDef { col: Col::PreDirection,  key: "pre_direction",  label: "Pre-Direction" },
+    ColDef { col: Col::StreetName,    key: "street_name",    label: "Street Name" },
+    ColDef { col: Col::Suffix,        key: "suffix",         label: "Suffix" },
+    ColDef { col: Col::PostDirection, key: "post_direction",  label: "Post-Direction" },
+    ColDef { col: Col::Unit,          key: "unit",           label: "Unit" },
+    ColDef { col: Col::UnitType,      key: "unit_type",      label: "Unit Type" },
+    ColDef { col: Col::PoBox,         key: "po_box",         label: "PO Box" },
+    ColDef { col: Col::Building,      key: "building",       label: "Building" },
+    ColDef { col: Col::ExtraFront,    key: "extra_front",    label: "Extra Front" },
+    ColDef { col: Col::ExtraBack,     key: "extra_back",     label: "Extra Back" },
+    ColDef { col: Col::City,          key: "city",           label: "City" },
+    ColDef { col: Col::State,         key: "state",          label: "State" },
+    ColDef { col: Col::Zip,           key: "zip",            label: "Zip" },
+];
+
+impl Col {
+    pub fn from_key(key: &str) -> Result<Col, String> {
+        COL_DEFS.iter()
+            .find(|d| d.key == key)
+            .map(|d| d.col)
+            .ok_or_else(|| format!("Unknown column name: {}", key))
+    }
+
+    pub fn key(&self) -> &'static str {
+        COL_DEFS.iter().find(|d| d.col == *self).unwrap().key
+    }
+
+    pub fn label(&self) -> &'static str {
+        COL_DEFS.iter().find(|d| d.col == *self).unwrap().label
+    }
 }
 
 /// Mutable state during parsing.
@@ -130,5 +182,24 @@ impl AddressState {
             working: prepared,
             fields: Address::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_col_from_key_roundtrip() {
+        for def in COL_DEFS {
+            assert_eq!(Col::from_key(def.key).unwrap(), def.col);
+            assert_eq!(def.col.label(), def.label);
+            assert_eq!(def.col.key(), def.key);
+        }
+    }
+
+    #[test]
+    fn test_col_from_key_unknown() {
+        assert!(Col::from_key("nonsense").is_err());
     }
 }

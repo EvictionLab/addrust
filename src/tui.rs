@@ -36,19 +36,7 @@ enum InputMode {
     AddVariant(usize, String, usize),
 }
 
-const ADDRESS_COLS: &[(&str, &str)] = &[
-    ("street_number", "Street Number"),
-    ("pre_direction", "Pre-Direction"),
-    ("street_name", "Street Name"),
-    ("suffix", "Suffix"),
-    ("post_direction", "Post-Direction"),
-    ("unit", "Unit"),
-    ("unit_type", "Unit Type"),
-    ("po_box", "PO Box"),
-    ("building", "Building"),
-    ("extra_front", "Extra Front"),
-    ("extra_back", "Extra Back"),
-];
+use crate::address::COL_DEFS;
 
 /// Fields in the step editor form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1951,9 +1939,9 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
         FormField::Targets => {
             let targets = form.def.targets.as_ref();
             let mut items = Vec::new();
-            for (i, (key, label)) in ADDRESS_COLS.iter().enumerate() {
+            for (i, col_def) in COL_DEFS.iter().enumerate() {
                 let is_selected = focused && form.right_cursor == i;
-                let group_num = targets.and_then(|t| t.get(*key)).copied();
+                let group_num = targets.and_then(|t| t.get(col_def.key)).copied();
                 let marker = match group_num {
                     Some(n) => format!("[{}]", n),
                     None => "[ ]".to_string(),
@@ -1969,7 +1957,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
                 let prefix = if is_selected { "> " } else { "  " };
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled(prefix, style),
-                    Span::styled(format!("{} {:16}", marker, label), style),
+                    Span::styled(format!("{} {:16}", marker, col_def.label), style),
                     Span::styled(detail, Style::new().fg(Color::DarkGray)),
                 ])));
             }
@@ -2006,10 +1994,10 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
                 ])));
             }
             let offset = if is_source { 1 } else { 0 };
-            for (i, (key, label)) in ADDRESS_COLS.iter().enumerate() {
+            for (i, col_def) in COL_DEFS.iter().enumerate() {
                 let list_idx = i + offset;
                 let is_selected = focused && form.right_cursor == list_idx;
-                let is_current = current == Some(*key);
+                let is_current = current == Some(col_def.key);
                 let style = if is_selected {
                     Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
                 } else if is_current {
@@ -2020,7 +2008,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled(if is_selected { "> " } else { "  " }, style),
                     Span::styled(if is_current { "[x] " } else { "[ ] " }, style),
-                    Span::styled(label.to_string(), style),
+                    Span::styled(col_def.label.to_string(), style),
                 ])));
             }
             let title = if is_source { "Source" } else { "Target" };
@@ -2355,7 +2343,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
     let current_field = form.visible_fields[form.field_cursor];
     let is_source = current_field == FormField::Source;
     let is_multi = current_field == FormField::Targets;
-    let item_count = if is_source { ADDRESS_COLS.len() + 1 } else { ADDRESS_COLS.len() };
+    let item_count = if is_source { COL_DEFS.len() + 1 } else { COL_DEFS.len() };
 
     match code {
         KeyCode::Down | KeyCode::Char('j') => {
@@ -2369,7 +2357,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
             if is_source && form.right_cursor == 0 {
                 form.def.source = None;
             } else {
-                let field_key = ADDRESS_COLS[form.right_cursor - offset].0;
+                let field_key = COL_DEFS[form.right_cursor - offset].key;
                 if is_source {
                     form.def.source = Some(field_key.to_string());
                 } else {
@@ -2380,7 +2368,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
             app.dirty = true;
         }
         KeyCode::Char(' ') if is_multi => {
-            let field_key = ADDRESS_COLS[form.right_cursor].0.to_string();
+            let field_key = COL_DEFS[form.right_cursor].key.to_string();
             let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
             if targets.contains_key(&field_key) {
                 targets.remove(&field_key);
@@ -2392,13 +2380,13 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char(c) if is_multi && c.is_ascii_digit() && c != '0' => {
             let group = (c as u8 - b'0') as usize;
-            let field_key = ADDRESS_COLS[form.right_cursor].0.to_string();
+            let field_key = COL_DEFS[form.right_cursor].key.to_string();
             let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
             targets.insert(field_key, group);
             app.dirty = true;
         }
         KeyCode::Char('d') if is_multi => {
-            let field_key = ADDRESS_COLS[form.right_cursor].0;
+            let field_key = COL_DEFS[form.right_cursor].key;
             if let Some(targets) = &mut form.def.targets {
                 targets.remove(field_key);
             }

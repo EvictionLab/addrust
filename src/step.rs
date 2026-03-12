@@ -435,23 +435,6 @@ pub struct StepsDef {
     pub step: Vec<StepDef>,
 }
 
-fn parse_col(name: &str) -> Result<Col, String> {
-    match name {
-        "street_number" => Ok(Col::StreetNumber),
-        "pre_direction" => Ok(Col::PreDirection),
-        "street_name" => Ok(Col::StreetName),
-        "suffix" => Ok(Col::Suffix),
-        "post_direction" => Ok(Col::PostDirection),
-        "unit" => Ok(Col::Unit),
-        "unit_type" => Ok(Col::UnitType),
-        "po_box" => Ok(Col::PoBox),
-        "building" => Ok(Col::Building),
-        "extra_front" => Ok(Col::ExtraFront),
-        "extra_back" => Ok(Col::ExtraBack),
-        _ => Err(format!("Unknown column name: {}", name)),
-    }
-}
-
 /// Compile a single StepDef into a Step, expanding table references in patterns.
 pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String> {
     match def.step_type.as_str() {
@@ -463,7 +446,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let expanded = expand_template(template, abbr);
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-            let source = def.source.as_ref().map(|s| parse_col(s)).transpose()?;
+            let source = def.source.as_ref().map(|s| Col::from_key(s)).transpose()?;
             Ok(Step::Rewrite {
                 label: def.label.clone(),
                 pattern,
@@ -503,7 +486,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let targets = if let Some(ref t) = def.targets {
                 let mut map = std::collections::HashMap::new();
                 for (field_name, group_num) in t {
-                    map.insert(parse_col(field_name)?, *group_num);
+                    map.insert(Col::from_key(field_name)?, *group_num);
                 }
                 Some(map)
             } else {
@@ -519,7 +502,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 }
                 None
             } else {
-                Some(parse_col(
+                Some(Col::from_key(
                     def.target
                         .as_ref()
                         .ok_or_else(|| format!("extract step '{}' missing target or targets", def.label))?
@@ -540,7 +523,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 None
             };
 
-            let source = def.source.as_ref().map(|s| parse_col(s)).transpose()?;
+            let source = def.source.as_ref().map(|s| Col::from_key(s)).transpose()?;
             Ok(Step::Extract {
                 label: def.label.clone(),
                 pattern,
@@ -586,7 +569,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
             Ok(Step::Standardize {
                 label: def.label.clone(),
-                target: parse_col(target)?,
+                target: Col::from_key(target)?,
                 table,
                 pattern,
                 mode,
@@ -812,8 +795,8 @@ table = "street_name_abbr"
     }
 
     #[test]
-    fn test_parse_field_invalid_returns_error() {
-        let result = parse_col("nonexistent_field");
+    fn test_col_from_key_invalid_returns_error() {
+        let result = Col::from_key("nonexistent_field");
         assert!(result.is_err());
     }
 
