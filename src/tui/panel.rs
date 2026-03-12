@@ -194,7 +194,7 @@ pub(crate) fn render_step_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     render_step_body(frame, app, body_area);
 
     let hints = match &panel.focus {
-        PanelFocus::Navigating => "Enter: edit  Esc: close  Space: toggle  r: restore default  Left/Right: change type",
+        PanelFocus::Navigating => "Enter: edit  Esc: close  Space: toggle  r: restore  t: change type",
         PanelFocus::InlineEdit { .. } => "Enter: confirm  Esc: cancel",
         PanelFocus::Dropdown { .. } => "Space: toggle  Enter: edit  Esc: collapse  a: add  d: delete",
         PanelFocus::DropdownEdit { .. } => "Enter: confirm  Esc: cancel",
@@ -454,17 +454,8 @@ fn handle_step_navigating(app: &mut App, code: KeyCode) {
         KeyCode::Up => {
             panel.field_cursor = if panel.field_cursor == 0 { field_count - 1 } else { panel.field_cursor - 1 };
         }
-        KeyCode::Left => {
-            let types = meta::STEP_TYPES;
-            let idx = types.iter().position(|t| t.name == panel.def.step_type).unwrap_or(0);
-            let new_idx = if idx == 0 { types.len() - 1 } else { idx - 1 };
-            panel.def.step_type = types[new_idx].name.to_string();
-            panel.visible_fields = visible_fields_for_type(&panel.def.step_type);
-            if panel.field_cursor >= panel.visible_fields.len() {
-                panel.field_cursor = panel.visible_fields.len().saturating_sub(1);
-            }
-        }
-        KeyCode::Right => {
+        KeyCode::Char('t') => {
+            // Cycle step type forward
             let types = meta::STEP_TYPES;
             let idx = types.iter().position(|t| t.name == panel.def.step_type).unwrap_or(0);
             let new_idx = (idx + 1) % types.len();
