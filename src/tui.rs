@@ -10,7 +10,6 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
-use crate::pattern::PatternSegment;
 use crate::tables::abbreviations::build_default_tables;
 
 /// Which top-level tab is active.
@@ -35,47 +34,6 @@ enum InputMode {
     EditVariants(usize, usize),
     /// Adding a new variant to a group: (group_index, text, cursor).
     AddVariant(usize, String, usize),
-    /// Editing a step's pattern template: (text, cursor position, optional validation error).
-    EditPattern(String, usize, Option<String>),
-    /// Add-step wizard: (wizard state, insertion index).
-    AddStep(WizardState, usize),
-}
-
-/// Accumulated wizard choices for building a new custom step.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct WizardAccumulator {
-    step_type: String,
-    pattern: String,
-    target: Option<String>,
-    targets: Option<HashMap<String, usize>>,
-    replacement: Option<String>,
-    table: Option<String>,
-    skip_if_filled: Option<bool>,
-    mode: Option<String>,
-}
-
-/// State for the add-step wizard.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum WizardState {
-    PickType(usize),
-    Pattern(String, usize, Option<String>),
-    /// For extract: choose single target vs. multiple targets
-    ExtractMode(usize),
-    PickTarget(usize),
-    /// Multi-target select: (cursor, selections as field_name → group_number)
-    /// Group number 0 means not selected; 1+ means capture group N.
-    PickTargets(usize, Vec<usize>),
-    /// Text input for capture group number when assigning a multi-target field
-    TargetGroup(usize, Vec<usize>, String, usize),
-    SkipIfFilled,
-    Replacement(String, usize),
-    RewriteMode(usize),
-    TableName(String, usize),
-    StandardizeMode(usize),
-    /// Pick table for standardization: (cursor, table_names)
-    PickTable(usize, Vec<String>),
-    WordMode(usize),
-    Label(String, usize),
 }
 
 const TARGET_FIELDS: &[(&str, &str)] = &[
@@ -91,8 +49,6 @@ const TARGET_FIELDS: &[(&str, &str)] = &[
     ("extra_front", "Extra Front"),
     ("extra_back", "Extra Back"),
 ];
-
-const STEP_TYPES: &[&str] = &["extract", "rewrite", "standardize"];
 
 /// Fields in the step editor form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,16 +246,6 @@ struct App {
     /// Original index before move started, for Esc cancel.
     moving_step_origin: Option<usize>,
 
-    // -- Step detail view --
-    /// If Some, we're viewing/editing a step's detail (index into steps vec).
-    step_detail_index: Option<usize>,
-    /// Parsed pattern segments for the step being viewed.
-    step_detail_segments: Vec<PatternSegment>,
-    /// Which segment is selected (only alternation groups are selectable).
-    step_detail_selected: usize,
-    /// If viewing inside an alternation group, which alternative is selected.
-    step_detail_alt_selected: Option<usize>,
-
     // -- Dictionaries tab --
     table_names: Vec<String>,
     dict_tab_index: usize,
@@ -311,10 +257,6 @@ struct App {
     // -- Output tab --
     output_settings: Vec<OutputSettingState>,
     output_list_state: ListState,
-
-    // -- Custom steps --
-    /// Wizard accumulator for building a new custom step.
-    wizard_acc: WizardAccumulator,
 
     // -- Step editor form --
     /// Step editor form state (when open).
@@ -537,10 +479,6 @@ impl App {
             steps_list_state,
             moving_step: None,
             moving_step_origin: None,
-            step_detail_index: None,
-            step_detail_segments: Vec::new(),
-            step_detail_selected: 0,
-            step_detail_alt_selected: None,
             table_names,
             dict_tab_index: 0,
             dict_entries,
@@ -548,7 +486,6 @@ impl App {
             input_mode: InputMode::Normal,
             output_settings,
             output_list_state,
-            wizard_acc: WizardAccumulator::default(),
             confirm_delete: None,
             form_state: None,
         }
@@ -759,13 +696,9 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 continue;
             }
 
-            // Input mode for dictionary editing and wizard
+            // Input mode for dictionary editing
             if app.input_mode != InputMode::Normal {
-                if matches!(app.input_mode, InputMode::AddStep(_, _)) {
-                    handle_wizard_key(app, key.code);
-                } else {
-                    handle_input_mode(app, key.code);
-                }
+                handle_input_mode(app, key.code);
                 continue;
             }
 
@@ -805,13 +738,7 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     }
                 }
                 _ => match app.active_tab {
-                    Tab::Steps => {
-                        if app.step_detail_index.is_some() {
-                            handle_step_detail_key(app, key.code);
-                        } else {
-                            handle_rules_key(app, key.code);
-                        }
-                    }
+                    Tab::Steps => handle_rules_key(app, key.code),
                     Tab::Dictionaries => handle_dict_key(app, key.code),
                     Tab::Output => handle_output_key(app, key.code),
                 },
@@ -913,12 +840,25 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Char('a') => {
-            let insert_after = app.steps_list_state.selected().unwrap_or(0);
-            app.wizard_acc = WizardAccumulator::default();
-            app.input_mode = InputMode::AddStep(
-                WizardState::PickType(0),
-                insert_after + 1,
-            );
+            let def = crate::step::StepDef {
+                label: format!("custom_{}", app.steps.len()),
+                step_type: "extract".to_string(),
+                ..Default::default()
+            };
+            let visible = visible_fields_for_type(&def.step_type, &def);
+            let segments = crate::pattern::parse_pattern(def.pattern.as_deref().unwrap_or(""));
+            app.form_state = Some(FormState {
+                step_index: None,
+                def,
+                visible_fields: visible,
+                field_cursor: 0,
+                focus: FormFocus::Left,
+                right_cursor: 0,
+                right_alt_selected: None,
+                pattern_segments: segments,
+                is_new: true,
+                show_discard_prompt: false,
+            });
         }
         KeyCode::Char('d') => {
             if let Some(i) = app.steps_list_state.selected() {
@@ -931,106 +871,6 @@ fn handle_rules_key(app: &mut App, code: KeyCode) {
     }
 }
 
-fn handle_step_detail_key(app: &mut App, code: KeyCode) {
-    match code {
-        // Back to steps list
-        KeyCode::Esc | KeyCode::Left => {
-            if app.step_detail_alt_selected.is_some() {
-                app.step_detail_alt_selected = None;
-            } else {
-                app.step_detail_index = None;
-            }
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if let Some(alt_idx) = app.step_detail_alt_selected {
-                // Navigate within alternation group
-                if let PatternSegment::AlternationGroup { alternatives, .. } =
-                    &app.step_detail_segments[app.step_detail_selected]
-                {
-                    if alt_idx + 1 < alternatives.len() {
-                        app.step_detail_alt_selected = Some(alt_idx + 1);
-                    }
-                }
-            } else {
-                // Navigate between segments (skip non-actionable ones)
-                let len = app.step_detail_segments.len();
-                let mut next = app.step_detail_selected + 1;
-                while next < len {
-                    match &app.step_detail_segments[next] {
-                        PatternSegment::AlternationGroup { .. } | PatternSegment::TableRef(_) => {
-                            break
-                        }
-                        _ => next += 1,
-                    }
-                }
-                if next < len {
-                    app.step_detail_selected = next;
-                }
-            }
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(alt_idx) = app.step_detail_alt_selected {
-                if alt_idx > 0 {
-                    app.step_detail_alt_selected = Some(alt_idx - 1);
-                }
-            } else {
-                // Navigate between segments (skip non-actionable ones)
-                let mut prev = app.step_detail_selected;
-                while prev > 0 {
-                    prev -= 1;
-                    match &app.step_detail_segments[prev] {
-                        PatternSegment::AlternationGroup { .. } | PatternSegment::TableRef(_) => {
-                            app.step_detail_selected = prev;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        // Enter/Right to drill into alternation group
-        KeyCode::Enter | KeyCode::Right => {
-            if app.step_detail_alt_selected.is_none() {
-                if let PatternSegment::AlternationGroup { .. } =
-                    &app.step_detail_segments[app.step_detail_selected]
-                {
-                    app.step_detail_alt_selected = Some(0);
-                }
-            }
-        }
-        // Edit the full pattern template
-        KeyCode::Char('e') => {
-            if let Some(step_idx) = app.step_detail_index {
-                let template = app.steps[step_idx].pattern_template().to_string();
-                let len = template.len();
-                app.input_mode = InputMode::EditPattern(template, len, None);
-            }
-        }
-        // Space to toggle alternative
-        KeyCode::Char(' ') => {
-            if let Some(alt_idx) = app.step_detail_alt_selected {
-                if let PatternSegment::AlternationGroup { alternatives, .. } =
-                    &mut app.step_detail_segments[app.step_detail_selected]
-                {
-                    // Don't allow disabling the last enabled alternative
-                    let enabled_count = alternatives.iter().filter(|a| a.enabled).count();
-                    if alternatives[alt_idx].enabled && enabled_count <= 1 {
-                        return;
-                    }
-                    alternatives[alt_idx].enabled = !alternatives[alt_idx].enabled;
-                    // Update the step's pattern from the modified segments
-                    let new_template =
-                        crate::pattern::rebuild_pattern(&app.step_detail_segments);
-                    if let Some(step_idx) = app.step_detail_index {
-                        app.steps[step_idx].def.pattern = Some(new_template);
-                    }
-                    app.dirty = true;
-                }
-            }
-        }
-        _ => {}
-    }
-}
 
 fn handle_dict_key(app: &mut App, code: KeyCode) {
     let num_tables = app.table_names.len();
@@ -1347,452 +1187,10 @@ fn handle_input_mode(app: &mut App, code: KeyCode) {
                 TextEditResult::Continue => {}
             }
         }
-        InputMode::EditPattern(text, cursor, error) => {
-            match text_edit(text, cursor, code) {
-                TextEditResult::Submit(_) => {
-                    match validate_pattern_template(text) {
-                        Ok(()) => {
-                            let new_template = text.clone();
-                            if let Some(step_idx) = app.step_detail_index {
-                                app.steps[step_idx].def.pattern = Some(new_template);
-                                app.step_detail_segments = crate::pattern::parse_pattern(
-                                    app.steps[step_idx].pattern_template(),
-                                );
-                                app.step_detail_selected = 0;
-                                app.step_detail_alt_selected = None;
-                                app.dirty = true;
-                            }
-                            app.input_mode = InputMode::Normal;
-                        }
-                        Err(msg) => {
-                            *error = Some(msg);
-                        }
-                    }
-                }
-                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
-                TextEditResult::Continue => { *error = None; }
-            }
-        }
-        InputMode::Normal | InputMode::AddStep(_, _) => unreachable!(),
+        InputMode::Normal => unreachable!(),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Wizard handler
-// ---------------------------------------------------------------------------
-
-/// Handle text editing keys for wizard text-input states.
-/// Returns Some(final_text) if Enter was pressed on valid input, None otherwise.
-fn handle_wizard_text_edit(
-    app: &mut App,
-    code: KeyCode,
-    text: &str,
-    cursor: usize,
-    insert_idx: usize,
-    make_state: impl Fn(String, usize, Option<String>) -> WizardState,
-    validate: bool,
-) -> Option<String> {
-    match code {
-        KeyCode::Enter => {
-            if validate {
-                match validate_pattern_template(text) {
-                    Ok(()) => return Some(text.to_string()),
-                    Err(msg) => {
-                        app.input_mode = InputMode::AddStep(
-                            make_state(text.to_string(), cursor, Some(msg)),
-                            insert_idx,
-                        );
-                        return None;
-                    }
-                }
-            }
-            return Some(text.to_string());
-        }
-        KeyCode::Esc => {
-            app.input_mode = InputMode::Normal;
-        }
-        KeyCode::Left => {
-            let new_cursor = if cursor > 0 { cursor - 1 } else { 0 };
-            app.input_mode = InputMode::AddStep(make_state(text.to_string(), new_cursor, None), insert_idx);
-        }
-        KeyCode::Right => {
-            let new_cursor = if cursor < text.len() { cursor + 1 } else { cursor };
-            app.input_mode = InputMode::AddStep(make_state(text.to_string(), new_cursor, None), insert_idx);
-        }
-        KeyCode::Char(c) => {
-            let mut t = text.to_string();
-            t.insert(cursor, c);
-            app.input_mode = InputMode::AddStep(make_state(t, cursor + 1, None), insert_idx);
-        }
-        KeyCode::Backspace => {
-            if cursor > 0 {
-                let mut t = text.to_string();
-                t.remove(cursor - 1);
-                app.input_mode = InputMode::AddStep(make_state(t, cursor - 1, None), insert_idx);
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
-fn handle_wizard_key(app: &mut App, code: KeyCode) {
-    let (wizard, insert_idx) = match &app.input_mode {
-        InputMode::AddStep(w, idx) => (w.clone(), *idx),
-        _ => return,
-    };
-
-    match wizard {
-        WizardState::PickType(selected) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickType((selected + 1) % STEP_TYPES.len()),
-                    insert_idx,
-                );
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickType(if selected == 0 { STEP_TYPES.len() - 1 } else { selected - 1 }),
-                    insert_idx,
-                );
-            }
-            KeyCode::Enter => {
-                app.wizard_acc.step_type = STEP_TYPES[selected].to_string();
-                let next = match STEP_TYPES[selected] {
-                    "extract" | "rewrite" => WizardState::Pattern(String::new(), 0, None),
-                    "standardize" => WizardState::PickTarget(0),
-                    _ => return,
-                };
-                app.input_mode = InputMode::AddStep(next, insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::Pattern(text, cursor, _) => {
-            if let Some(pattern) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, e| WizardState::Pattern(t, c, e),
-                true,
-            ) {
-                app.wizard_acc.pattern = pattern;
-                let next = match app.wizard_acc.step_type.as_str() {
-                    "extract" => WizardState::ExtractMode(0),
-                    "rewrite" => WizardState::RewriteMode(0),
-                    "standardize" => WizardState::Replacement(String::new(), 0),
-                    _ => return,
-                };
-                app.input_mode = InputMode::AddStep(next, insert_idx);
-            }
-        }
-
-        WizardState::ExtractMode(selected) => {
-            const EXTRACT_MODES: &[&str] = &["Single target", "Multiple targets"];
-            match code {
-                KeyCode::Down | KeyCode::Char('j') => {
-                    app.input_mode = InputMode::AddStep(
-                        WizardState::ExtractMode((selected + 1) % EXTRACT_MODES.len()),
-                        insert_idx,
-                    );
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    app.input_mode = InputMode::AddStep(
-                        WizardState::ExtractMode(if selected == 0 { EXTRACT_MODES.len() - 1 } else { selected - 1 }),
-                        insert_idx,
-                    );
-                }
-                KeyCode::Enter => {
-                    let next = if selected == 0 {
-                        WizardState::PickTarget(0)
-                    } else {
-                        WizardState::PickTargets(0, vec![0; TARGET_FIELDS.len()])
-                    };
-                    app.input_mode = InputMode::AddStep(next, insert_idx);
-                }
-                KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-                _ => {}
-            }
-        }
-
-        WizardState::PickTargets(selected, groups) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTargets((selected + 1) % TARGET_FIELDS.len(), groups),
-                    insert_idx,
-                );
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTargets(if selected == 0 { TARGET_FIELDS.len() - 1 } else { selected - 1 }, groups),
-                    insert_idx,
-                );
-            }
-            KeyCode::Char(' ') => {
-                // Toggle: if already assigned, clear it; otherwise prompt for group number
-                let mut groups = groups;
-                if groups[selected] > 0 {
-                    groups[selected] = 0;
-                    app.input_mode = InputMode::AddStep(
-                        WizardState::PickTargets(selected, groups),
-                        insert_idx,
-                    );
-                } else {
-                    app.input_mode = InputMode::AddStep(
-                        WizardState::TargetGroup(selected, groups, String::new(), 0),
-                        insert_idx,
-                    );
-                }
-            }
-            KeyCode::Enter => {
-                // Finalize: build targets map from non-zero entries
-                let mut targets = HashMap::new();
-                for (i, &g) in groups.iter().enumerate() {
-                    if g > 0 {
-                        targets.insert(TARGET_FIELDS[i].0.to_string(), g);
-                    }
-                }
-                if targets.is_empty() {
-                    return; // Must select at least one target
-                }
-                app.wizard_acc.targets = Some(targets);
-                app.input_mode = InputMode::AddStep(WizardState::SkipIfFilled, insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::TargetGroup(field_idx, groups, text, cursor) => match code {
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                let mut text = text;
-                text.insert(cursor, c);
-                app.input_mode = InputMode::AddStep(
-                    WizardState::TargetGroup(field_idx, groups, text, cursor + 1),
-                    insert_idx,
-                );
-            }
-            KeyCode::Backspace => {
-                if cursor > 0 {
-                    let mut text = text;
-                    text.remove(cursor - 1);
-                    app.input_mode = InputMode::AddStep(
-                        WizardState::TargetGroup(field_idx, groups, text, cursor - 1),
-                        insert_idx,
-                    );
-                }
-            }
-            KeyCode::Enter => {
-                if let Ok(n) = text.parse::<usize>() {
-                    if n > 0 {
-                        let mut groups = groups;
-                        groups[field_idx] = n;
-                        app.input_mode = InputMode::AddStep(
-                            WizardState::PickTargets(field_idx, groups),
-                            insert_idx,
-                        );
-                    }
-                }
-            }
-            KeyCode::Esc => {
-                // Cancel group entry, go back to PickTargets
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTargets(field_idx, groups),
-                    insert_idx,
-                );
-            }
-            _ => {}
-        },
-
-        WizardState::PickTarget(selected) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTarget((selected + 1) % TARGET_FIELDS.len()),
-                    insert_idx,
-                );
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTarget(if selected == 0 { TARGET_FIELDS.len() - 1 } else { selected - 1 }),
-                    insert_idx,
-                );
-            }
-            KeyCode::Enter => {
-                app.wizard_acc.target = Some(TARGET_FIELDS[selected].0.to_string());
-                let next = match app.wizard_acc.step_type.as_str() {
-                    "extract" => WizardState::SkipIfFilled,
-                    "standardize" => WizardState::StandardizeMode(0),
-                    _ => return,
-                };
-                app.input_mode = InputMode::AddStep(next, insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::SkipIfFilled => match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.wizard_acc.skip_if_filled = Some(true);
-                app.input_mode = InputMode::AddStep(
-                    WizardState::Replacement(String::new(), 0), insert_idx,
-                );
-            }
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                app.wizard_acc.skip_if_filled = Some(false);
-                app.input_mode = InputMode::AddStep(
-                    WizardState::Replacement(String::new(), 0), insert_idx,
-                );
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::Replacement(text, cursor) => {
-            if let Some(repl) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, _| WizardState::Replacement(t, c),
-                false,
-            ) {
-                app.wizard_acc.replacement = if repl.is_empty() { None } else { Some(repl) };
-                let suggestion = format!("custom_{}_{}", app.wizard_acc.step_type,
-                    app.wizard_acc.target.as_deref().unwrap_or("general"));
-                app.input_mode = InputMode::AddStep(
-                    WizardState::Label(suggestion.clone(), suggestion.len()), insert_idx,
-                );
-            }
-        }
-
-        WizardState::RewriteMode(selected) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(WizardState::RewriteMode((selected + 1) % 2), insert_idx);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(WizardState::RewriteMode(if selected == 0 { 1 } else { 0 }), insert_idx);
-            }
-            KeyCode::Enter => {
-                let next = if selected == 0 {
-                    WizardState::Replacement(String::new(), 0)
-                } else {
-                    WizardState::TableName(String::new(), 0)
-                };
-                app.input_mode = InputMode::AddStep(next, insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::TableName(text, cursor) => {
-            if let Some(name) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, _| WizardState::TableName(t, c),
-                false,
-            ) {
-                app.wizard_acc.table = Some(name);
-                let suggestion = format!("custom_rewrite_{}", app.wizard_acc.table.as_deref().unwrap_or("general"));
-                app.input_mode = InputMode::AddStep(
-                    WizardState::Label(suggestion.clone(), suggestion.len()), insert_idx,
-                );
-            }
-        }
-
-        WizardState::StandardizeMode(selected) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(WizardState::StandardizeMode((selected + 1) % 2), insert_idx);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(WizardState::StandardizeMode(if selected == 0 { 1 } else { 0 }), insert_idx);
-            }
-            KeyCode::Enter => {
-                let next = if selected == 0 {
-                    WizardState::Pattern(String::new(), 0, None)
-                } else {
-                    let names: Vec<String> = TABLE_DESCRIPTIONS.iter().map(|(n, _)| n.to_string()).collect();
-                    WizardState::PickTable(0, names)
-                };
-                app.input_mode = InputMode::AddStep(next, insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::PickTable(selected, names) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTable((selected + 1) % names.len(), names),
-                    insert_idx,
-                );
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(
-                    WizardState::PickTable(if selected == 0 { names.len() - 1 } else { selected - 1 }, names),
-                    insert_idx,
-                );
-            }
-            KeyCode::Enter => {
-                app.wizard_acc.table = Some(names[selected].clone());
-                app.input_mode = InputMode::AddStep(WizardState::WordMode(0), insert_idx);
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::WordMode(selected) => match code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.input_mode = InputMode::AddStep(WizardState::WordMode((selected + 1) % 2), insert_idx);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.input_mode = InputMode::AddStep(WizardState::WordMode(if selected == 0 { 1 } else { 0 }), insert_idx);
-            }
-            KeyCode::Enter => {
-                app.wizard_acc.mode = if selected == 1 { Some("per_word".to_string()) } else { None };
-                let suggestion = format!("custom_standardize_{}", app.wizard_acc.target.as_deref().unwrap_or("general"));
-                app.input_mode = InputMode::AddStep(
-                    WizardState::Label(suggestion.clone(), suggestion.len()), insert_idx,
-                );
-            }
-            KeyCode::Esc => { app.input_mode = InputMode::Normal; }
-            _ => {}
-        },
-
-        WizardState::Label(text, cursor) => {
-            if let Some(label) = handle_wizard_text_edit(
-                app, code, &text, cursor, insert_idx,
-                |t, c, _| WizardState::Label(t, c),
-                false,
-            ) {
-                if label.is_empty() { return; }
-                if app.steps.iter().any(|s| s.label() == label) { return; }
-
-                let acc = &app.wizard_acc;
-                let def = crate::step::StepDef {
-                    step_type: acc.step_type.clone(),
-                    label: label.clone(),
-                    pattern: if acc.pattern.is_empty() { None } else { Some(acc.pattern.clone()) },
-                    table: acc.table.clone(),
-                    target: if acc.targets.is_some() { None } else { acc.target.clone() },
-                    replacement: acc.replacement.clone(),
-                    skip_if_filled: acc.skip_if_filled,
-                    source: None,
-                    matching_table: None,
-                    format_table: None,
-                    mode: acc.mode.clone(),
-                    targets: acc.targets.clone(),
-                };
-
-                let step_state = StepState {
-                    enabled: true,
-                    default_enabled: true,
-                    is_custom: true,
-                    def: def,
-                    default_def: None,
-                };
-
-                app.steps.insert(insert_idx, step_state);
-                app.steps_list_state.select(Some(insert_idx));
-                app.dirty = true;
-                app.input_mode = InputMode::Normal;
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Rendering
@@ -1934,12 +1332,6 @@ fn render(frame: &mut Frame, app: &mut App) {
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
         }
-        InputMode::EditPattern(_, _, _) => {
-            // Pattern editing is rendered inline in the step detail view
-        }
-        InputMode::AddStep(wizard, _) => {
-            render_wizard(frame, wizard, &app.wizard_acc);
-        }
     }
 
     // Delete confirmation overlay
@@ -1957,11 +1349,6 @@ fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    if app.step_detail_index.is_some() {
-        render_step_detail(frame, app, area);
-        return;
-    }
-
     let items: Vec<ListItem> = app
         .steps
         .iter()
@@ -2014,378 +1401,6 @@ fn render_steps(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
         .highlight_symbol("> ");
 
     frame.render_stateful_widget(list, area, &mut app.steps_list_state);
-}
-
-fn render_step_detail(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
-    let step_idx = app.step_detail_index.unwrap();
-    let step = &app.steps[step_idx];
-
-    let is_editing = matches!(app.input_mode, InputMode::EditPattern(_, _, _));
-    let header_height = if is_editing { 7 } else { 5 };
-
-    let [header_area, segments_area] = Layout::vertical([
-        Constraint::Length(header_height),
-        Constraint::Fill(1),
-    ])
-    .areas(area);
-
-    // Header: step name, type, action, enabled status
-    let header_text = format!(
-        " {}  |  type: {}  |  {}",
-        step.label(),
-        step.step_type(),
-        if step.enabled { "enabled" } else { "DISABLED" },
-    );
-
-    let mut header_lines = vec![
-        Line::from(header_text),
-        Line::from(""),
-    ];
-
-    if let InputMode::EditPattern(text, cursor, error) = &app.input_mode {
-        let (before, after) = text.split_at(*cursor);
-        header_lines.push(Line::from(vec![
-            Span::styled(" Pattern: ", Style::new().fg(Color::Cyan)),
-            Span::styled(before, Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(
-                if after.is_empty() { "_".to_string() } else { after[..1].to_string() },
-                Style::new().fg(Color::Black).bg(Color::White),
-            ),
-            Span::styled(
-                if after.len() > 1 { &after[1..] } else { "" },
-                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        if let Some(err_msg) = error {
-            header_lines.push(Line::from(""));
-            header_lines.push(Line::from(Span::styled(
-                format!(" Error: {}", err_msg),
-                Style::new().fg(Color::Red),
-            )));
-        }
-    } else {
-        header_lines.push(Line::from(Span::styled(
-            format!(" Pattern: {}  (e to edit)", step.pattern_template()),
-            Style::new().fg(Color::DarkGray),
-        )));
-    }
-
-    let title = if is_editing {
-        format!("Step: {} (Enter: confirm, Esc: cancel)", step.label())
-    } else {
-        format!("Step: {} (Esc to go back)", step.label())
-    };
-    let header = Paragraph::new(header_lines)
-        .block(Block::bordered().title(title));
-    frame.render_widget(header, header_area);
-
-    // Segments list
-    let mut items: Vec<ListItem> = Vec::new();
-
-    for (seg_idx, segment) in app.step_detail_segments.iter().enumerate() {
-        match segment {
-            PatternSegment::Literal(text) => {
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("  ", Style::new()),
-                    Span::styled(text.as_str(), Style::new().fg(Color::DarkGray)),
-                ])));
-            }
-            PatternSegment::TableRef(name) => {
-                let is_selected = app.step_detail_alt_selected.is_none()
-                    && app.step_detail_selected == seg_idx;
-                let style = if is_selected {
-                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new().fg(Color::Cyan)
-                };
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled(if is_selected { "> " } else { "  " }, style),
-                    Span::styled(format!("{{{}}}", name), style),
-                    Span::styled(
-                        "  (edit in Dictionaries tab)",
-                        Style::new().fg(Color::DarkGray),
-                    ),
-                ])));
-            }
-            PatternSegment::AlternationGroup { alternatives, .. } => {
-                let is_group_selected = app.step_detail_alt_selected.is_none()
-                    && app.step_detail_selected == seg_idx;
-                let group_style = if is_group_selected {
-                    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new().fg(Color::Yellow)
-                };
-                let enabled_count = alternatives.iter().filter(|a| a.enabled).count();
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled(
-                        if is_group_selected { "> " } else { "  " },
-                        group_style,
-                    ),
-                    Span::styled(
-                        format!(
-                            "Match group ({}/{} enabled)  (Enter to expand)",
-                            enabled_count,
-                            alternatives.len()
-                        ),
-                        group_style,
-                    ),
-                ])));
-
-                // Show alternatives if this group is drilled into
-                if app.step_detail_selected == seg_idx && app.step_detail_alt_selected.is_some() {
-                    for (alt_idx, alt) in alternatives.iter().enumerate() {
-                        let is_alt_selected = app.step_detail_alt_selected == Some(alt_idx);
-                        let (marker, style) = if !alt.enabled {
-                            ("x", Style::new().fg(Color::Red))
-                        } else {
-                            (" ", Style::new().fg(Color::Green))
-                        };
-                        let prefix = if is_alt_selected { "  > " } else { "    " };
-                        items.push(ListItem::new(Line::from(vec![
-                            Span::styled(prefix, style),
-                            Span::styled(format!("[{}] ", marker), style),
-                            Span::styled(
-                                alt.text.as_str(),
-                                if is_alt_selected {
-                                    style.add_modifier(Modifier::BOLD)
-                                } else {
-                                    style
-                                },
-                            ),
-                        ])));
-                    }
-                }
-            }
-        }
-    }
-
-    let list = List::new(items).block(Block::bordered().title("Pattern Segments"));
-    frame.render_widget(list, segments_area);
-}
-
-fn render_wizard(frame: &mut Frame, wizard: &WizardState, acc: &WizardAccumulator) {
-    let popup_area = centered_rect(60, 14, frame.area());
-    frame.render_widget(ratatui::widgets::Clear, popup_area);
-
-    match wizard {
-        WizardState::PickType(selected) => {
-            let items: Vec<ListItem> = STEP_TYPES
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    let prefix = if i == *selected { "> " } else { "  " };
-                    ListItem::new(format!("{}{}", prefix, t)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add Step — pick type (Enter to select, Esc to cancel)"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::Pattern(text, cursor, error) => {
-            let title = format!("Add {} — pattern (Enter to continue, Esc to cancel)", acc.step_type);
-            render_wizard_text_input(frame, popup_area, &title, text, *cursor, error.as_deref());
-        }
-        WizardState::ExtractMode(selected) => {
-            let options = ["Single target", "Multiple targets (named capture groups)"];
-            let items: Vec<ListItem> = options
-                .iter()
-                .enumerate()
-                .map(|(i, label)| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    let prefix = if i == *selected { "> " } else { "  " };
-                    ListItem::new(format!("{}{}", prefix, label)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add extract — target mode"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::PickTarget(selected) => {
-            let items: Vec<ListItem> = TARGET_FIELDS
-                .iter()
-                .enumerate()
-                .map(|(i, (_, display))| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    let prefix = if i == *selected { "> " } else { "  " };
-                    ListItem::new(format!("{}{}", prefix, display)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add step — target field (Enter to select)"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::PickTargets(selected, groups) => {
-            let items: Vec<ListItem> = TARGET_FIELDS
-                .iter()
-                .enumerate()
-                .map(|(i, (_, display))| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    let prefix = if i == *selected { "> " } else { "  " };
-                    let check = if groups[i] > 0 {
-                        format!("[group {}] ", groups[i])
-                    } else {
-                        "[ ] ".to_string()
-                    };
-                    ListItem::new(format!("{}{}{}", prefix, check, display)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add extract — targets (Space to toggle, Enter to confirm)"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::TargetGroup(_, _, text, cursor) => {
-            render_wizard_text_input(
-                frame, popup_area,
-                "Capture group number for this field (Enter to confirm, Esc to cancel)",
-                text, *cursor, None,
-            );
-        }
-        WizardState::SkipIfFilled => {
-            let popup = Paragraph::new("Skip if target field already has a value? (y/n)")
-                .block(Block::bordered().title("Add step — skip_if_filled"))
-                .style(Style::new().bg(Color::Black).fg(Color::Cyan));
-            frame.render_widget(popup, popup_area);
-        }
-        WizardState::Replacement(text, cursor) => {
-            render_wizard_text_input(frame, popup_area, "Add step — replacement (Enter to continue, empty = none)", text, *cursor, None);
-        }
-        WizardState::RewriteMode(selected) => {
-            let options = ["Replacement text", "Table-driven"];
-            let items: Vec<ListItem> = options
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    ListItem::new(format!("{}{}", if i == *selected { "> " } else { "  " }, t)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add rewrite — replacement mode"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::TableName(text, cursor) => {
-            render_wizard_text_input(frame, popup_area, "Add step — table name (Enter to continue)", text, *cursor, None);
-        }
-        WizardState::StandardizeMode(selected) => {
-            let options = ["Pattern + replacement", "Table-based"];
-            let items: Vec<ListItem> = options
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    ListItem::new(format!("{}{}", if i == *selected { "> " } else { "  " }, t)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add standardize — approach"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::PickTable(selected, names) => {
-            let items: Vec<ListItem> = names
-                .iter()
-                .enumerate()
-                .map(|(i, name)| {
-                    let desc = TABLE_DESCRIPTIONS
-                        .iter()
-                        .find(|(n, _)| *n == name.as_str())
-                        .map(|(_, d)| *d)
-                        .unwrap_or("");
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    let prefix = if i == *selected { "> " } else { "  " };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(format!("{}{:20}", prefix, name), style),
-                        Span::styled(format!("  {}", desc), Style::new().fg(Color::DarkGray)),
-                    ]))
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Pick table for standardization (Enter to select)"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::WordMode(selected) => {
-            let options = ["Whole field", "Per word"];
-            let items: Vec<ListItem> = options
-                .iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    let style = if i == *selected {
-                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new()
-                    };
-                    ListItem::new(format!("{}{}", if i == *selected { "> " } else { "  " }, t)).style(style)
-                })
-                .collect();
-            let list = List::new(items)
-                .block(Block::bordered().title("Add standardize — word mode"));
-            frame.render_widget(list, popup_area);
-        }
-        WizardState::Label(text, cursor) => {
-            render_wizard_text_input(frame, popup_area, "Add step — label (Enter to create)", text, *cursor, None);
-        }
-    }
-}
-
-fn render_wizard_text_input(
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-    title: &str,
-    text: &str,
-    cursor: usize,
-    error: Option<&str>,
-) {
-    let (before, after) = text.split_at(cursor.min(text.len()));
-    let mut lines = vec![Line::from(vec![
-        Span::styled(before, Style::new().fg(Color::White)),
-        Span::styled(
-            if after.is_empty() { "_".to_string() } else { after[..1].to_string() },
-            Style::new().fg(Color::Black).bg(Color::White),
-        ),
-        Span::styled(
-            if after.len() > 1 { &after[1..] } else { "" },
-            Style::new().fg(Color::White),
-        ),
-    ])];
-    if let Some(err) = error {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            format!("Error: {}", err),
-            Style::new().fg(Color::Red),
-        )));
-    }
-    let popup = Paragraph::new(lines)
-        .block(Block::bordered().title(title))
-        .style(Style::new().bg(Color::Black).fg(Color::Cyan));
-    frame.render_widget(popup, area);
 }
 
 fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
@@ -2525,14 +1540,6 @@ fn render_dict(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
 // ---------------------------------------------------------------------------
 
 /// Validate a pattern template by expanding table placeholders and compiling.
-fn validate_pattern_template(template: &str) -> Result<(), String> {
-    let tables = build_default_tables();
-    let expanded = crate::step::expand_template(template, &tables);
-    fancy_regex::Regex::new(&expanded)
-        .map(|_| ())
-        .map_err(|e| format!("{}", e))
-}
-
 // ---------------------------------------------------------------------------
 // Step editor form — rendering
 // ---------------------------------------------------------------------------

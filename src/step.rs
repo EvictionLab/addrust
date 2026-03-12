@@ -401,7 +401,7 @@ pub fn apply_step(
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq)]
 pub struct StepDef {
     #[serde(rename = "type")]
     pub step_type: String,
