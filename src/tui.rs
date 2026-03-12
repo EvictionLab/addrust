@@ -2847,30 +2847,219 @@ fn render_form_help_panel(
 
 fn render_form_pattern_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let form = app.form_state.as_ref().unwrap();
-    let text = form.def.pattern.as_deref().unwrap_or("(no pattern)");
-    let panel = Paragraph::new(vec![
-        Line::from(Span::styled("Pattern", Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
-        Line::from(Span::styled("e: edit raw regex   Enter: drill into group", Style::new().fg(Color::DarkGray))),
-        Line::from(""),
-        Line::from(Span::styled(text, Style::new().fg(Color::White))),
-    ])
-    .wrap(Wrap { trim: false })
-    .block(Block::bordered().border_style(Style::new().fg(
-        if matches!(form.focus, FormFocus::RightPattern) { Color::Cyan } else { Color::DarkGray }
-    )));
-    frame.render_widget(panel, area);
+    let focused = matches!(form.focus, FormFocus::RightPattern);
+    let mut items: Vec<ListItem> = Vec::new();
+
+    if form.pattern_segments.is_empty() {
+        let text = form.def.pattern.as_deref().unwrap_or("(no pattern)");
+        items.push(ListItem::new(Line::from(Span::styled(text, Style::new().fg(Color::DarkGray)))));
+    } else {
+        // Track which selectable index we're on (only alternation groups and table refs)
+        let mut selectable_idx = 0usize;
+        for segment in &form.pattern_segments {
+            match segment {
+                crate::pattern::PatternSegment::Literal(text) => {
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled("  ", Style::new()),
+                        Span::styled(text.as_str(), Style::new().fg(Color::DarkGray)),
+                    ])));
+                }
+                crate::pattern::PatternSegment::TableRef(name) => {
+                    let is_selected = focused && form.right_alt_selected.is_none()
+                        && form.right_cursor == selectable_idx;
+                    let style = if is_selected {
+                        Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(Color::Cyan)
+                    };
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(if is_selected { "> " } else { "  " }, style),
+                        Span::styled(format!("{{{}}}", name), style),
+                    ])));
+                    selectable_idx += 1;
+                }
+                crate::pattern::PatternSegment::AlternationGroup { alternatives, .. } => {
+                    let is_group_selected = focused && form.right_alt_selected.is_none()
+                        && form.right_cursor == selectable_idx;
+                    let group_style = if is_group_selected {
+                        Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(Color::Yellow)
+                    };
+                    let enabled_count = alternatives.iter().filter(|a| a.enabled).count();
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(if is_group_selected { "> " } else { "  " }, group_style),
+                        Span::styled(
+                            format!("Match group ({}/{} enabled)", enabled_count, alternatives.len()),
+                            group_style,
+                        ),
+                    ])));
+
+                    // Show alternatives when drilled into this group
+                    if focused && form.right_cursor == selectable_idx && form.right_alt_selected.is_some() {
+                        for (alt_idx, alt) in alternatives.iter().enumerate() {
+                            let is_alt_selected = form.right_alt_selected == Some(alt_idx);
+                            let (marker, style) = if !alt.enabled {
+                                ("x", Style::new().fg(Color::Red))
+                            } else {
+                                (" ", Style::new().fg(Color::Green))
+                            };
+                            let prefix = if is_alt_selected { "  > " } else { "    " };
+                            items.push(ListItem::new(Line::from(vec![
+                                Span::styled(prefix, style),
+                                Span::styled(format!("[{}] ", marker), style),
+                                Span::styled(
+                                    alt.text.as_str(),
+                                    if is_alt_selected { style.add_modifier(Modifier::BOLD) } else { style },
+                                ),
+                            ])));
+                        }
+                    }
+                    selectable_idx += 1;
+                }
+            }
+        }
+    }
+
+    let hints = if form.right_alt_selected.is_some() {
+        "Space: toggle  a: add  d: delete  Esc: collapse"
+    } else {
+        "j/k: navigate  Enter: expand  e: edit raw  Esc: back"
+    };
+    let list = List::new(items).block(
+        Block::bordered()
+            .title("Pattern")
+            .title_bottom(hints)
+            .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+    );
+    frame.render_widget(list, area);
 }
 
-fn render_form_targets_panel(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
-    let panel = Paragraph::new("Targets (TODO)")
-        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
-    frame.render_widget(panel, area);
+fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let form = app.form_state.as_ref().unwrap();
+    let current_form_field = form.visible_fields[form.field_cursor];
+    let focused = form.focus == FormFocus::RightTargets;
+
+    match current_form_field {
+        FormField::Targets => {
+            let targets = form.def.targets.as_ref();
+            let mut items = Vec::new();
+            for (i, (key, label)) in TARGET_FIELDS.iter().enumerate() {
+                let is_selected = focused && form.right_cursor == i;
+                let group_num = targets.and_then(|t| t.get(*key)).copied();
+                let marker = match group_num {
+                    Some(n) => format!("[{}]", n),
+                    None => "[ ]".to_string(),
+                };
+                let detail = group_num.map(|n| format!(" = capture group {}", n)).unwrap_or_default();
+                let style = if is_selected {
+                    Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else if group_num.is_some() {
+                    Style::new().fg(Color::Green)
+                } else {
+                    Style::new().fg(Color::DarkGray)
+                };
+                let prefix = if is_selected { "> " } else { "  " };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(format!("{} {:16}", marker, label), style),
+                    Span::styled(detail, Style::new().fg(Color::DarkGray)),
+                ])));
+            }
+            let list = List::new(items).block(
+                Block::bordered()
+                    .title("Targets")
+                    .title_bottom("Space: toggle  1-9: set group  d: remove  Esc: back")
+                    .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+            );
+            frame.render_widget(list, area);
+        }
+        FormField::Target | FormField::Source => {
+            let is_source = current_form_field == FormField::Source;
+            let current = if is_source {
+                form.def.source.as_deref()
+            } else {
+                form.def.target.as_deref()
+            };
+            let mut items = Vec::new();
+            if is_source {
+                let is_selected = focused && form.right_cursor == 0;
+                let is_current = current.is_none();
+                let style = if is_selected {
+                    Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else if is_current {
+                    Style::new().fg(Color::Green)
+                } else {
+                    Style::new().fg(Color::DarkGray)
+                };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(if is_selected { "> " } else { "  " }, style),
+                    Span::styled(if is_current { "[x] " } else { "[ ] " }, style),
+                    Span::styled("working string", style),
+                ])));
+            }
+            let offset = if is_source { 1 } else { 0 };
+            for (i, (key, label)) in TARGET_FIELDS.iter().enumerate() {
+                let list_idx = i + offset;
+                let is_selected = focused && form.right_cursor == list_idx;
+                let is_current = current == Some(*key);
+                let style = if is_selected {
+                    Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else if is_current {
+                    Style::new().fg(Color::Green)
+                } else {
+                    Style::new().fg(Color::DarkGray)
+                };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(if is_selected { "> " } else { "  " }, style),
+                    Span::styled(if is_current { "[x] " } else { "[ ] " }, style),
+                    Span::styled(label.to_string(), style),
+                ])));
+            }
+            let title = if is_source { "Source" } else { "Target" };
+            let list = List::new(items).block(
+                Block::bordered()
+                    .title(title)
+                    .title_bottom("Enter: select  Esc: back")
+                    .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+            );
+            frame.render_widget(list, area);
+        }
+        _ => {}
+    }
 }
 
-fn render_form_table_panel(frame: &mut Frame, _app: &App, area: ratatui::layout::Rect) {
-    let panel = Paragraph::new("Table picker (TODO)")
-        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
-    frame.render_widget(panel, area);
+fn render_form_table_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let form = app.form_state.as_ref().unwrap();
+    let focused = form.focus == FormFocus::RightTable;
+    let current_table = form.def.table.as_deref();
+    let mut items = Vec::new();
+
+    for (i, (name, desc)) in TABLE_DESCRIPTIONS.iter().enumerate() {
+        let is_selected = focused && form.right_cursor == i;
+        let is_current = current_table == Some(*name);
+        let style = if is_selected {
+            Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else if is_current {
+            Style::new().fg(Color::Green)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(if is_selected { "> " } else { "  " }, style),
+            Span::styled(if is_current { "[x] " } else { "[ ] " }, style),
+            Span::styled(format!("{:20}", name), style),
+            Span::styled(*desc, Style::new().fg(Color::DarkGray)),
+        ])));
+    }
+
+    let list = List::new(items).block(
+        Block::bordered()
+            .title("Table")
+            .title_bottom("Enter: select  Esc: back")
+            .border_style(Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray }))
+    );
+    frame.render_widget(list, area);
 }
 
 // ---------------------------------------------------------------------------
@@ -3056,7 +3245,88 @@ fn validate_step_def(def: &crate::step::StepDef) -> bool {
 
 fn handle_form_pattern_key(app: &mut App, code: KeyCode) {
     let form = app.form_state.as_mut().unwrap();
+    // Count selectable segments (alternation groups + table refs)
+    let selectable: Vec<usize> = form.pattern_segments.iter().enumerate()
+        .filter(|(_, s)| matches!(s,
+            crate::pattern::PatternSegment::AlternationGroup { .. } |
+            crate::pattern::PatternSegment::TableRef(_)))
+        .map(|(i, _)| i)
+        .collect();
+    let selectable_count = selectable.len();
+
     match code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(alt_idx) = form.right_alt_selected {
+                // Inside alternation group — navigate alternatives
+                if let Some(seg_real) = selectable.get(form.right_cursor) {
+                    if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                        form.pattern_segments.get(*seg_real)
+                    {
+                        if alt_idx + 1 < alternatives.len() {
+                            form.right_alt_selected = Some(alt_idx + 1);
+                        }
+                    }
+                }
+            } else if selectable_count > 0 {
+                form.right_cursor = (form.right_cursor + 1) % selectable_count;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(alt_idx) = form.right_alt_selected {
+                if alt_idx > 0 {
+                    form.right_alt_selected = Some(alt_idx - 1);
+                }
+            } else if selectable_count > 0 {
+                form.right_cursor = if form.right_cursor == 0 { selectable_count - 1 } else { form.right_cursor - 1 };
+            }
+        }
+        KeyCode::Enter => {
+            if form.right_alt_selected.is_none() {
+                if let Some(&seg_real) = selectable.get(form.right_cursor) {
+                    if matches!(form.pattern_segments.get(seg_real),
+                        Some(crate::pattern::PatternSegment::AlternationGroup { .. }))
+                    {
+                        form.right_alt_selected = Some(0);
+                    }
+                }
+            }
+        }
+        KeyCode::Char(' ') => {
+            if let Some(alt_idx) = form.right_alt_selected {
+                if let Some(&seg_real) = selectable.get(form.right_cursor) {
+                    if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                        form.pattern_segments.get_mut(seg_real)
+                    {
+                        alternatives[alt_idx].enabled = !alternatives[alt_idx].enabled;
+                        form.def.pattern = Some(crate::pattern::rebuild_pattern(&form.pattern_segments));
+                        app.dirty = true;
+                    }
+                }
+            }
+        }
+        KeyCode::Char('a') => {
+            if form.right_alt_selected.is_some() {
+                form.focus = FormFocus::EditingText("add_alternative".to_string(), 0, String::new());
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Some(alt_idx) = form.right_alt_selected {
+                if let Some(&seg_real) = selectable.get(form.right_cursor) {
+                    if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                        form.pattern_segments.get_mut(seg_real)
+                    {
+                        if alternatives.len() > 1 {
+                            alternatives.remove(alt_idx);
+                            if alt_idx >= alternatives.len() {
+                                form.right_alt_selected = Some(alternatives.len() - 1);
+                            }
+                            form.def.pattern = Some(crate::pattern::rebuild_pattern(&form.pattern_segments));
+                            app.dirty = true;
+                        }
+                    }
+                }
+            }
+        }
         KeyCode::Char('e') => {
             let text = form.def.pattern.clone().unwrap_or_default();
             let len = text.len();
@@ -3075,15 +3345,84 @@ fn handle_form_pattern_key(app: &mut App, code: KeyCode) {
 
 fn handle_form_targets_key(app: &mut App, code: KeyCode) {
     let form = app.form_state.as_mut().unwrap();
-    if code == KeyCode::Esc {
-        form.focus = FormFocus::Left;
+    let current_field = form.visible_fields[form.field_cursor];
+    let is_source = current_field == FormField::Source;
+    let is_multi = current_field == FormField::Targets;
+    let item_count = if is_source { TARGET_FIELDS.len() + 1 } else { TARGET_FIELDS.len() };
+
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            form.right_cursor = (form.right_cursor + 1) % item_count;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            form.right_cursor = if form.right_cursor == 0 { item_count - 1 } else { form.right_cursor - 1 };
+        }
+        KeyCode::Enter if !is_multi => {
+            let offset = if is_source { 1 } else { 0 };
+            if is_source && form.right_cursor == 0 {
+                form.def.source = None;
+            } else {
+                let field_key = TARGET_FIELDS[form.right_cursor - offset].0;
+                if is_source {
+                    form.def.source = Some(field_key.to_string());
+                } else {
+                    form.def.target = Some(field_key.to_string());
+                }
+            }
+            form.focus = FormFocus::Left;
+            app.dirty = true;
+        }
+        KeyCode::Char(' ') if is_multi => {
+            let field_key = TARGET_FIELDS[form.right_cursor].0.to_string();
+            let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
+            if targets.contains_key(&field_key) {
+                targets.remove(&field_key);
+            } else {
+                let max = targets.values().max().copied().unwrap_or(0);
+                targets.insert(field_key, max + 1);
+            }
+            app.dirty = true;
+        }
+        KeyCode::Char(c) if is_multi && c.is_ascii_digit() && c != '0' => {
+            let group = (c as u8 - b'0') as usize;
+            let field_key = TARGET_FIELDS[form.right_cursor].0.to_string();
+            let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
+            targets.insert(field_key, group);
+            app.dirty = true;
+        }
+        KeyCode::Char('d') if is_multi => {
+            let field_key = TARGET_FIELDS[form.right_cursor].0;
+            if let Some(targets) = &mut form.def.targets {
+                targets.remove(field_key);
+            }
+            app.dirty = true;
+        }
+        KeyCode::Esc => {
+            form.focus = FormFocus::Left;
+        }
+        _ => {}
     }
 }
 
 fn handle_form_table_key(app: &mut App, code: KeyCode) {
     let form = app.form_state.as_mut().unwrap();
-    if code == KeyCode::Esc {
-        form.focus = FormFocus::Left;
+    match code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            form.right_cursor = (form.right_cursor + 1) % TABLE_DESCRIPTIONS.len();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            form.right_cursor = if form.right_cursor == 0 { TABLE_DESCRIPTIONS.len() - 1 } else { form.right_cursor - 1 };
+        }
+        KeyCode::Enter => {
+            let table_name = TABLE_DESCRIPTIONS[form.right_cursor].0;
+            form.def.table = Some(table_name.to_string());
+            form.focus = FormFocus::Left;
+            app.dirty = true;
+        }
+        KeyCode::Esc => {
+            form.focus = FormFocus::Left;
+        }
+        _ => {}
     }
 }
 
@@ -3105,11 +3444,20 @@ fn handle_form_text_edit(app: &mut App, code: KeyCode) {
                     }
                     "add_alternative" => {
                         if !value.is_empty() {
-                            if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
-                                form.pattern_segments.get_mut(form.right_cursor)
-                            {
-                                alternatives.push(crate::pattern::Alternative { text: value, enabled: true });
-                                form.def.pattern = Some(crate::pattern::rebuild_pattern(&form.pattern_segments));
+                            // Resolve selectable index to real segment index
+                            let seg_real = form.pattern_segments.iter().enumerate()
+                                .filter(|(_, s)| matches!(s,
+                                    crate::pattern::PatternSegment::AlternationGroup { .. } |
+                                    crate::pattern::PatternSegment::TableRef(_)))
+                                .nth(form.right_cursor)
+                                .map(|(i, _)| i);
+                            if let Some(idx) = seg_real {
+                                if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                                    form.pattern_segments.get_mut(idx)
+                                {
+                                    alternatives.push(crate::pattern::Alternative { text: value, enabled: true });
+                                    form.def.pattern = Some(crate::pattern::rebuild_pattern(&form.pattern_segments));
+                                }
                             }
                         }
                         form.focus = FormFocus::RightPattern;
