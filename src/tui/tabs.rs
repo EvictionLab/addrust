@@ -504,8 +504,43 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('a') => {
             app.input_mode = InputMode::AddShort(String::new(), 0);
         }
+        // Toggle removal (like steps tab Space toggle)
+        KeyCode::Char(' ') => {
+            if let Some(i) = app.dict_list_state.selected() {
+                let entry = &mut app.current_dict_entries_mut()[i];
+                match entry.status {
+                    GroupStatus::Default | GroupStatus::Modified => {
+                        entry.status = GroupStatus::Removed;
+                        app.dirty = true;
+                    }
+                    GroupStatus::Removed => {
+                        // Restore: if it was modified before removal, go back to Modified
+                        if entry.short != entry.original_short
+                            || entry.long != entry.original_long
+                            || entry.variants != entry.original_variants
+                        {
+                            entry.status = GroupStatus::Modified;
+                        } else {
+                            entry.status = GroupStatus::Default;
+                        }
+                        app.dirty = true;
+                    }
+                    GroupStatus::Added => {
+                        // Remove the added entry entirely
+                        app.current_dict_entries_mut().remove(i);
+                        let len = app.current_dict_entries().len();
+                        if len == 0 {
+                            app.dict_list_state.select(None);
+                        } else if i >= len {
+                            app.dict_list_state.select(Some(len - 1));
+                        }
+                        app.dirty = true;
+                    }
+                }
+            }
+        }
         // Open EditVariants modal
-        KeyCode::Enter | KeyCode::Char(' ') => {
+        KeyCode::Enter => {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
@@ -1302,6 +1337,10 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
                     GroupStatus::Removed => Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT),
                     GroupStatus::Modified => Style::new().fg(Color::Yellow),
                 };
+                let check = match e.status {
+                    GroupStatus::Removed => Cell::from(Span::styled("✗", Style::new().fg(Color::Red))),
+                    _ => Cell::from(Span::styled("✓", Style::new().fg(Color::Green))),
+                };
                 let variants_str = if e.variants.is_empty() {
                     String::new()
                 } else {
@@ -1309,16 +1348,18 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
                 };
                 if is_value_list {
                     Row::new(vec![
-                        Cell::from(e.short.clone()),
-                        Cell::from(""),
-                        Cell::from(variants_str),
-                    ]).style(style)
+                        check,
+                        Cell::from(e.short.clone()).style(style),
+                        Cell::from("".to_string()),
+                        Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
+                    ])
                 } else {
                     Row::new(vec![
-                        Cell::from(e.short.clone()),
-                        Cell::from(e.long.clone()),
-                        Cell::from(variants_str),
-                    ]).style(style)
+                        check,
+                        Cell::from(e.short.clone()).style(style),
+                        Cell::from(e.long.clone()).style(style),
+                        Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
+                    ])
                 }
             })
             .collect()
@@ -1327,12 +1368,14 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
     let table_name = &app.table_names[app.dict_tab_index];
 
     let widths = [
+        Constraint::Length(1),    // check
         Constraint::Length(12),   // short
-        Constraint::Length(16),   // long
+        Constraint::Length(20),   // long
         Constraint::Fill(1),      // variants
     ];
 
     let header = Row::new(vec![
+        Cell::from(""),
         Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
         Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
         Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
