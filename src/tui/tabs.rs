@@ -1143,6 +1143,9 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
                 .map(|m| m.display)
                 .unwrap_or(r.step_type());
 
+            // Input column
+            let input = r.def.input_col.as_deref().unwrap_or("(working)");
+
             // Output column
             let output = match &r.def.output_col {
                 Some(OutputCol::Single(name)) => name.clone(),
@@ -1154,16 +1157,28 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
                 None => "\u{2014}".to_string(), // em-dash
             };
 
+            // Pattern/table (truncated)
+            let pattern = if let Some(tbl) = &r.def.table {
+                format!("{{{}}}", tbl)
+            } else {
+                r.def.pattern.as_deref().unwrap_or("").to_string()
+            };
+            let pattern_truncated = super::widgets::truncate(&pattern, 30);
+
             Row::new(vec![
                 Cell::from(Line::from(check)),
                 Cell::from(label).style(style),
                 Cell::from(type_display),
+                Cell::from(input.to_string()),
                 Cell::from(output),
+                Cell::from(pattern_truncated).style(
+                    if is_moving { style } else { Style::new().fg(Color::DarkGray) }
+                ),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["", "Label", "Type", "Output"])
+    let header = Row::new(vec!["", "Label", "Type", "Input", "Output", "Pattern"])
         .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .bottom_margin(1);
 
@@ -1171,7 +1186,9 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1),   // check
         Constraint::Min(16),     // label
         Constraint::Length(11),  // type
-        Constraint::Fill(1),     // output
+        Constraint::Length(12),  // input
+        Constraint::Length(14),  // output
+        Constraint::Fill(1),     // pattern
     ];
 
     let table = Table::new(rows, widths)
@@ -1279,26 +1296,28 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
         entries
             .iter()
             .map(|e| {
-                let (status_str, style) = match e.status {
-                    GroupStatus::Default => ("Default", Style::new()),
-                    GroupStatus::Added => ("Added", Style::new().fg(Color::Green)),
-                    GroupStatus::Removed => ("Removed", Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT)),
-                    GroupStatus::Modified => ("Modified", Style::new().fg(Color::Yellow)),
+                let style = match e.status {
+                    GroupStatus::Default => Style::new(),
+                    GroupStatus::Added => Style::new().fg(Color::Green),
+                    GroupStatus::Removed => Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT),
+                    GroupStatus::Modified => Style::new().fg(Color::Yellow),
                 };
-                let variant_count = format!("{}", e.variants.len());
+                let variants_str = if e.variants.is_empty() {
+                    String::new()
+                } else {
+                    e.variants.join(", ")
+                };
                 if is_value_list {
                     Row::new(vec![
                         Cell::from(e.short.clone()),
                         Cell::from(""),
-                        Cell::from(variant_count),
-                        Cell::from(status_str),
+                        Cell::from(variants_str),
                     ]).style(style)
                 } else {
                     Row::new(vec![
                         Cell::from(e.short.clone()),
                         Cell::from(e.long.clone()),
-                        Cell::from(variant_count),
-                        Cell::from(status_str),
+                        Cell::from(variants_str),
                     ]).style(style)
                 }
             })
@@ -1308,17 +1327,15 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
     let table_name = &app.table_names[app.dict_tab_index];
 
     let widths = [
-        Constraint::Percentage(20),
-        Constraint::Percentage(35),
-        Constraint::Percentage(15),
-        Constraint::Percentage(30),
+        Constraint::Length(12),   // short
+        Constraint::Length(16),   // long
+        Constraint::Fill(1),      // variants
     ];
 
     let header = Row::new(vec![
         Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
         Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
         Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
-        Cell::from("Status").style(Style::new().add_modifier(Modifier::BOLD)),
     ]).style(Style::new().fg(Color::Cyan));
 
     let table_widget = Table::new(rows, widths)
