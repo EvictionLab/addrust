@@ -1,7 +1,7 @@
 use fancy_regex::{Captures, Regex};
 use serde::{Deserialize, Serialize};
 
-use crate::address::Field;
+use crate::address::Col;
 use crate::config::OutputFormat;
 use crate::ops::{extract_remove, none_if_empty, replace_pattern, squish};
 use crate::tables::abbreviations::AbbrTable;
@@ -165,23 +165,23 @@ pub enum Step {
         pattern_template: String,
         replacement: Option<String>,
         rewrite_table: Option<String>,
-        source: Option<Field>,
+        source: Option<Col>,
         enabled: bool,
     },
     Extract {
         label: String,
         pattern: Regex,
         pattern_template: String,
-        target: Option<Field>,
-        targets: Option<std::collections::HashMap<Field, usize>>,
+        target: Option<Col>,
+        targets: Option<std::collections::HashMap<Col, usize>>,
         skip_if_filled: bool,
         replacement: Option<(Regex, String)>,
-        source: Option<Field>,
+        source: Option<Col>,
         enabled: bool,
     },
     Standardize {
         label: String,
-        target: Field,
+        target: Col,
         table: String,
         pattern: Option<(Regex, String)>,
         mode: StandardizeMode,
@@ -435,20 +435,20 @@ pub struct StepsDef {
     pub step: Vec<StepDef>,
 }
 
-fn parse_field(name: &str) -> Result<Field, String> {
+fn parse_col(name: &str) -> Result<Col, String> {
     match name {
-        "street_number" => Ok(Field::StreetNumber),
-        "pre_direction" => Ok(Field::PreDirection),
-        "street_name" => Ok(Field::StreetName),
-        "suffix" => Ok(Field::Suffix),
-        "post_direction" => Ok(Field::PostDirection),
-        "unit" => Ok(Field::Unit),
-        "unit_type" => Ok(Field::UnitType),
-        "po_box" => Ok(Field::PoBox),
-        "building" => Ok(Field::Building),
-        "extra_front" => Ok(Field::ExtraFront),
-        "extra_back" => Ok(Field::ExtraBack),
-        _ => Err(format!("Unknown field name: {}", name)),
+        "street_number" => Ok(Col::StreetNumber),
+        "pre_direction" => Ok(Col::PreDirection),
+        "street_name" => Ok(Col::StreetName),
+        "suffix" => Ok(Col::Suffix),
+        "post_direction" => Ok(Col::PostDirection),
+        "unit" => Ok(Col::Unit),
+        "unit_type" => Ok(Col::UnitType),
+        "po_box" => Ok(Col::PoBox),
+        "building" => Ok(Col::Building),
+        "extra_front" => Ok(Col::ExtraFront),
+        "extra_back" => Ok(Col::ExtraBack),
+        _ => Err(format!("Unknown column name: {}", name)),
     }
 }
 
@@ -463,7 +463,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let expanded = expand_template(template, abbr);
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-            let source = def.source.as_ref().map(|s| parse_field(s)).transpose()?;
+            let source = def.source.as_ref().map(|s| parse_col(s)).transpose()?;
             Ok(Step::Rewrite {
                 label: def.label.clone(),
                 pattern,
@@ -503,7 +503,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let targets = if let Some(ref t) = def.targets {
                 let mut map = std::collections::HashMap::new();
                 for (field_name, group_num) in t {
-                    map.insert(parse_field(field_name)?, *group_num);
+                    map.insert(parse_col(field_name)?, *group_num);
                 }
                 Some(map)
             } else {
@@ -519,7 +519,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 }
                 None
             } else {
-                Some(parse_field(
+                Some(parse_col(
                     def.target
                         .as_ref()
                         .ok_or_else(|| format!("extract step '{}' missing target or targets", def.label))?
@@ -540,7 +540,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 None
             };
 
-            let source = def.source.as_ref().map(|s| parse_field(s)).transpose()?;
+            let source = def.source.as_ref().map(|s| parse_col(s)).transpose()?;
             Ok(Step::Extract {
                 label: def.label.clone(),
                 pattern,
@@ -586,7 +586,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
             Ok(Step::Standardize {
                 label: def.label.clone(),
-                target: parse_field(target)?,
+                target: parse_col(target)?,
                 table,
                 pattern,
                 mode,
@@ -813,7 +813,7 @@ table = "street_name_abbr"
 
     #[test]
     fn test_parse_field_invalid_returns_error() {
-        let result = parse_field("nonexistent_field");
+        let result = parse_col("nonexistent_field");
         assert!(result.is_err());
     }
 

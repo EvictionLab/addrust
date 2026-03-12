@@ -44,12 +44,12 @@ impl OutputConfig {
         *self == Self::default()
     }
 
-    pub fn format_for_field(&self, field: crate::address::Field) -> OutputFormat {
-        use crate::address::Field;
-        match field {
-            Field::Suffix => self.suffix,
-            Field::PreDirection | Field::PostDirection => self.direction,
-            Field::Unit => self.unit_location,
+    pub fn format_for_field(&self, col: crate::address::Col) -> OutputFormat {
+        use crate::address::Col;
+        match col {
+            Col::Suffix => self.suffix,
+            Col::PreDirection | Col::PostDirection => self.direction,
+            Col::Unit => self.unit_location,
             _ => OutputFormat::Long,
         }
     }

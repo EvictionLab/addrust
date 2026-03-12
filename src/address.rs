@@ -57,43 +57,43 @@ impl Address {
     }
 
     /// Get a mutable reference to a field by enum variant.
-    pub fn field_mut(&mut self, field: Field) -> &mut Option<String> {
-        match field {
-            Field::StreetNumber => &mut self.street_number,
-            Field::PreDirection => &mut self.pre_direction,
-            Field::StreetName => &mut self.street_name,
-            Field::Suffix => &mut self.suffix,
-            Field::PostDirection => &mut self.post_direction,
-            Field::Unit => &mut self.unit,
-            Field::UnitType => &mut self.unit_type,
-            Field::PoBox => &mut self.po_box,
-            Field::Building => &mut self.building,
-            Field::ExtraFront => &mut self.extra_front,
-            Field::ExtraBack => &mut self.extra_back,
+    pub fn field_mut(&mut self, col: Col) -> &mut Option<String> {
+        match col {
+            Col::StreetNumber => &mut self.street_number,
+            Col::PreDirection => &mut self.pre_direction,
+            Col::StreetName => &mut self.street_name,
+            Col::Suffix => &mut self.suffix,
+            Col::PostDirection => &mut self.post_direction,
+            Col::Unit => &mut self.unit,
+            Col::UnitType => &mut self.unit_type,
+            Col::PoBox => &mut self.po_box,
+            Col::Building => &mut self.building,
+            Col::ExtraFront => &mut self.extra_front,
+            Col::ExtraBack => &mut self.extra_back,
         }
     }
 
     /// Get a reference to a field by enum variant.
-    pub fn field(&self, field: Field) -> &Option<String> {
-        match field {
-            Field::StreetNumber => &self.street_number,
-            Field::PreDirection => &self.pre_direction,
-            Field::StreetName => &self.street_name,
-            Field::Suffix => &self.suffix,
-            Field::PostDirection => &self.post_direction,
-            Field::Unit => &self.unit,
-            Field::UnitType => &self.unit_type,
-            Field::PoBox => &self.po_box,
-            Field::Building => &self.building,
-            Field::ExtraFront => &self.extra_front,
-            Field::ExtraBack => &self.extra_back,
+    pub fn field(&self, col: Col) -> &Option<String> {
+        match col {
+            Col::StreetNumber => &self.street_number,
+            Col::PreDirection => &self.pre_direction,
+            Col::StreetName => &self.street_name,
+            Col::Suffix => &self.suffix,
+            Col::PostDirection => &self.post_direction,
+            Col::Unit => &self.unit,
+            Col::UnitType => &self.unit_type,
+            Col::PoBox => &self.po_box,
+            Col::Building => &self.building,
+            Col::ExtraFront => &self.extra_front,
+            Col::ExtraBack => &self.extra_back,
         }
     }
 }
 
-/// Which field of an Address a step targets.
+/// Which column of a parsed address a step targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Field {
+pub enum Col {
     StreetNumber,
     PreDirection,
     StreetName,

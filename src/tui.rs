@@ -36,7 +36,7 @@ enum InputMode {
     AddVariant(usize, String, usize),
 }
 
-const TARGET_FIELDS: &[(&str, &str)] = &[
+const ADDRESS_COLS: &[(&str, &str)] = &[
     ("street_number", "Street Number"),
     ("pre_direction", "Pre-Direction"),
     ("street_name", "Street Name"),
@@ -1951,7 +1951,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
         FormField::Targets => {
             let targets = form.def.targets.as_ref();
             let mut items = Vec::new();
-            for (i, (key, label)) in TARGET_FIELDS.iter().enumerate() {
+            for (i, (key, label)) in ADDRESS_COLS.iter().enumerate() {
                 let is_selected = focused && form.right_cursor == i;
                 let group_num = targets.and_then(|t| t.get(*key)).copied();
                 let marker = match group_num {
@@ -2006,7 +2006,7 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
                 ])));
             }
             let offset = if is_source { 1 } else { 0 };
-            for (i, (key, label)) in TARGET_FIELDS.iter().enumerate() {
+            for (i, (key, label)) in ADDRESS_COLS.iter().enumerate() {
                 let list_idx = i + offset;
                 let is_selected = focused && form.right_cursor == list_idx;
                 let is_current = current == Some(*key);
@@ -2355,7 +2355,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
     let current_field = form.visible_fields[form.field_cursor];
     let is_source = current_field == FormField::Source;
     let is_multi = current_field == FormField::Targets;
-    let item_count = if is_source { TARGET_FIELDS.len() + 1 } else { TARGET_FIELDS.len() };
+    let item_count = if is_source { ADDRESS_COLS.len() + 1 } else { ADDRESS_COLS.len() };
 
     match code {
         KeyCode::Down | KeyCode::Char('j') => {
@@ -2369,7 +2369,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
             if is_source && form.right_cursor == 0 {
                 form.def.source = None;
             } else {
-                let field_key = TARGET_FIELDS[form.right_cursor - offset].0;
+                let field_key = ADDRESS_COLS[form.right_cursor - offset].0;
                 if is_source {
                     form.def.source = Some(field_key.to_string());
                 } else {
@@ -2380,7 +2380,7 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
             app.dirty = true;
         }
         KeyCode::Char(' ') if is_multi => {
-            let field_key = TARGET_FIELDS[form.right_cursor].0.to_string();
+            let field_key = ADDRESS_COLS[form.right_cursor].0.to_string();
             let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
             if targets.contains_key(&field_key) {
                 targets.remove(&field_key);
@@ -2392,13 +2392,13 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char(c) if is_multi && c.is_ascii_digit() && c != '0' => {
             let group = (c as u8 - b'0') as usize;
-            let field_key = TARGET_FIELDS[form.right_cursor].0.to_string();
+            let field_key = ADDRESS_COLS[form.right_cursor].0.to_string();
             let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
             targets.insert(field_key, group);
             app.dirty = true;
         }
         KeyCode::Char('d') if is_multi => {
-            let field_key = TARGET_FIELDS[form.right_cursor].0;
+            let field_key = ADDRESS_COLS[form.right_cursor].0;
             if let Some(targets) = &mut form.def.targets {
                 targets.remove(field_key);
             }
