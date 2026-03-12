@@ -1,85 +1,103 @@
-#![allow(dead_code)]
-
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
-use ratatui::widgets::Block;
+use crossterm::event::KeyCode;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use crate::address::COL_DEFS;
+use crate::pattern::{self, PatternSegment};
+use crate::step::{OutputCol, StepDef};
+
+use super::meta::{self, PropKey, TABLE_DESCRIPTIONS};
 use super::widgets;
+use super::App;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelFocus {
-    Table,
-    Detail,
-}
+// Re-export types used by mod.rs and tabs.rs
+pub(crate) use types::*;
 
-/// Render a two-panel layout: table on left, detail on right.
-/// Returns the inner areas for table and detail content.
-pub fn render_panel_frame(
-    frame: &mut Frame,
-    area: Rect,
-    focus: PanelFocus,
-    title: &str,
-) -> (Rect, Rect) {
-    let [table_area, detail_area] = Layout::horizontal([
-        Constraint::Percentage(55),
-        Constraint::Percentage(45),
-    ])
-    .areas(area);
-
-    let table_block = Block::bordered()
-        .title(title)
-        .border_style(widgets::focus_border(focus == PanelFocus::Table));
-    frame.render_widget(table_block, table_area);
-
-    let detail_block = Block::bordered()
-        .border_style(widgets::focus_border(focus == PanelFocus::Detail));
-    frame.render_widget(detail_block, detail_area);
-
-    let table_inner = table_area.inner(Margin::new(1, 1));
-    let detail_inner = detail_area.inner(Margin::new(1, 1));
-    (table_inner, detail_inner)
-}
-
-/// Handle arrow key navigation for a panel.
-/// Returns true if the key was consumed.
-pub fn handle_panel_nav(
-    focus: &mut PanelFocus,
-    selected: &mut usize,
-    item_count: usize,
-    code: crossterm::event::KeyCode,
-) -> bool {
-    use crossterm::event::KeyCode;
-    match code {
-        KeyCode::Up => {
-            if *focus == PanelFocus::Table && item_count > 0 {
-                *selected = if *selected == 0 {
-                    item_count - 1
-                } else {
-                    *selected - 1
-                };
-            }
-            true
-        }
-        KeyCode::Down => {
-            if *focus == PanelFocus::Table && item_count > 0 {
-                *selected = (*selected + 1) % item_count;
-            }
-            true
-        }
-        KeyCode::Right | KeyCode::Enter => {
-            if *focus == PanelFocus::Table {
-                *focus = PanelFocus::Detail;
-            }
-            true
-        }
-        KeyCode::Left | KeyCode::Esc => {
-            if *focus == PanelFocus::Detail {
-                *focus = PanelFocus::Table;
-                true
-            } else {
-                false
-            }
-        }
-        _ => false,
+mod types {
+    /// Which panel is open.
+    #[derive(Debug, Clone)]
+    pub(crate) enum PanelKind {
+        Step(StepPanelState),
+        Dict(DictPanelState),
     }
+
+    /// Focus state within the panel.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum PanelFocus {
+        /// Navigating the field list with up/down.
+        Navigating,
+        /// Editing a single-value field inline (cursor position, buffer text).
+        InlineEdit { cursor: usize, buffer: String },
+        /// Navigating items in an expanded dropdown.
+        Dropdown { cursor: usize },
+        /// Editing an item within a dropdown (item index, cursor, buffer).
+        DropdownEdit { item: usize, cursor: usize, buffer: String },
+    }
+
+    /// Step panel state.
+    /// Note: step type is stored in `def.step_type` — no separate field.
+    /// When cycling types with Left/Right, update `def.step_type` directly.
+    #[derive(Debug, Clone)]
+    pub(crate) struct StepPanelState {
+        /// Index into App.steps, or None for new step.
+        pub(crate) step_index: Option<usize>,
+        /// Working copy of the step definition (includes step_type).
+        pub(crate) def: crate::step::StepDef,
+        /// Which fields are visible (computed from def.step_type).
+        pub(crate) visible_fields: Vec<StepField>,
+        /// Cursor position in visible_fields.
+        pub(crate) field_cursor: usize,
+        /// Current focus.
+        pub(crate) focus: PanelFocus,
+        /// Parsed pattern segments for drill-down.
+        pub(crate) pattern_segments: Vec<crate::pattern::PatternSegment>,
+        /// Whether this is a new step.
+        pub(crate) is_new: bool,
+        /// Show discard confirmation.
+        pub(crate) show_discard_prompt: bool,
+    }
+
+    /// Dictionary panel state.
+    #[derive(Debug, Clone)]
+    pub(crate) struct DictPanelState {
+        /// Index into the current dict_entries vec.
+        pub(crate) entry_index: usize,
+        /// Working copies.
+        pub(crate) short: String,
+        pub(crate) long: String,
+        pub(crate) variants: Vec<(String, bool)>,  // (text, enabled)
+        /// Which field is focused: 0=short, 1=long, 2=variants.
+        pub(crate) field_cursor: usize,
+        /// Current focus.
+        pub(crate) focus: PanelFocus,
+        /// Whether this is a new entry.
+        pub(crate) is_new: bool,
+    }
+
+    /// Fields in the step panel.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum StepField {
+        Label,
+        Pattern,
+        Table,
+        OutputCol,
+        SkipIfFilled,
+        Replacement,
+        InputCol,
+        Mode,
+    }
+}
+
+/// Compute a centered overlay rect with auto-height.
+/// Width is 70% of area, height is `content_lines` + 5 (header 3 + footer 2),
+/// clamped to area height - 4.
+pub(crate) fn centered_overlay(area: Rect, content_lines: u16) -> Rect {
+    let width = (area.width * 70 / 100).max(50).min(100).min(area.width);
+    let height = (content_lines + 5).min(area.height.saturating_sub(4));
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    Rect::new(x, y, width, height)
 }
