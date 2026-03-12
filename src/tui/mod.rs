@@ -57,13 +57,11 @@ pub(crate) struct App {
     /// Dictionary entries per table, with change tracking.
     pub(crate) dict_entries: Vec<Vec<DictGroupState>>,
     pub(crate) dict_list_state: ratatui::widgets::TableState,
-    pub(crate) dict_panel_focus: panel::PanelFocus,
     pub(crate) input_mode: InputMode,
 
     // -- Output tab --
     pub(crate) output_settings: Vec<OutputSettingState>,
     pub(crate) output_list_state: ratatui::widgets::TableState,
-    pub(crate) output_panel_focus: panel::PanelFocus,
 
     // -- Step editor form --
     /// Step editor form state (when open).
@@ -290,11 +288,9 @@ impl App {
             dict_tab_index: 0,
             dict_entries,
             dict_list_state,
-            dict_panel_focus: panel::PanelFocus::Table,
             input_mode: InputMode::Normal,
             output_settings,
             output_list_state,
-            output_panel_focus: panel::PanelFocus::Table,
             confirm_delete: None,
             form_state: None,
         }
