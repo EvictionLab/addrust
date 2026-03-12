@@ -716,26 +716,6 @@ fn render(frame: &mut Frame, app: &mut App) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn centered_rect_pct(
-    percent_x: u16,
-    percent_y: u16,
-    area: ratatui::layout::Rect,
-) -> ratatui::layout::Rect {
-    let [_, center_v, _] = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .areas(area);
-    let [_, center_h, _] = Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .areas(center_v);
-    center_h
-}
-
 pub(crate) fn centered_rect(
     percent_x: u16,
     height: u16,

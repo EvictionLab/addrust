@@ -1,19 +1,5 @@
-#![allow(dead_code)]
-
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-
-pub fn selected_style(selected: bool) -> Style {
-    if selected {
-        Style::new().fg(Color::White).add_modifier(Modifier::BOLD)
-    } else {
-        Style::new()
-    }
-}
-
-pub fn focus_border(focused: bool) -> Style {
-    Style::new().fg(if focused { Color::Cyan } else { Color::DarkGray })
-}
 
 pub fn checkbox(checked: bool) -> &'static str {
     if checked { "[x]" } else { "[ ]" }

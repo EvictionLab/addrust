@@ -80,20 +80,6 @@ impl StepState {
             Some(default) => self.def != *default || self.enabled != self.default_enabled,
         }
     }
-    pub(crate) fn is_field_modified(&self, field: &str) -> bool {
-        let Some(default) = &self.default_def else { return false };
-        match field {
-            "pattern" => self.def.pattern != default.pattern,
-            "output_col" => self.def.output_col != default.output_col,
-            "replacement" => self.def.replacement != default.replacement,
-            "skip_if_filled" => self.def.skip_if_filled != default.skip_if_filled,
-            "table" => self.def.table != default.table,
-            "input_col" => self.def.input_col != default.input_col,
-            "mode" => self.def.mode != default.mode,
-            "label" => false,
-            _ => false,
-        }
-    }
 }
 
 /// Result of a text editing keystroke.

@@ -2,11 +2,10 @@ use crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::address::COL_DEFS;
-use crate::pattern::{self, PatternSegment};
 use crate::step::{OutputCol, StepDef};
 
 use super::meta::{self, PropKey, TABLE_DESCRIPTIONS};
@@ -714,15 +713,6 @@ fn close_step_panel(app: &mut App) {
 
 fn validate_step_def(def: &StepDef) -> bool {
     !def.label.is_empty() && (def.pattern.is_some() || def.table.is_some())
-}
-
-/// Get step type from a StepDef. Falls back to "extract" if empty.
-pub(crate) fn get_step_type(def: &StepDef) -> String {
-    if def.step_type.is_empty() {
-        "extract".to_string()
-    } else {
-        def.step_type.clone()
-    }
 }
 
 /// Render the dictionary entry panel overlay.
