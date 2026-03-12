@@ -9,7 +9,7 @@ use crate::address::COL_DEFS;
 use crate::step::OutputCol;
 use crate::tables::abbreviations::build_default_tables;
 
-use super::App;
+use super::{App, panel};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -430,99 +430,138 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
 
 pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
     let num_tables = app.table_names.len();
-    match code {
-        // Sub-tab navigation
-        KeyCode::Right => {
-            app.dict_tab_index = (app.dict_tab_index + 1) % num_tables;
-            let len = app.current_dict_entries().len();
-            app.dict_list_state
-                .select(if len > 0 { Some(0) } else { None });
-        }
-        KeyCode::Left => {
-            app.dict_tab_index = if app.dict_tab_index == 0 {
-                num_tables - 1
-            } else {
-                app.dict_tab_index - 1
-            };
-            let len = app.current_dict_entries().len();
-            app.dict_list_state
-                .select(if len > 0 { Some(0) } else { None });
-        }
-        // Entry navigation
-        KeyCode::Down => {
-            let len = app.current_dict_entries().len();
-            if len > 0 {
-                let i = app.dict_list_state.selected().unwrap_or(0);
-                app.dict_list_state.select(Some((i + 1) % len));
-            }
-        }
-        KeyCode::Up => {
-            let len = app.current_dict_entries().len();
-            if len > 0 {
-                let i = app.dict_list_state.selected().unwrap_or(0);
-                app.dict_list_state
-                    .select(Some(if i == 0 { len - 1 } else { i - 1 }));
-            }
-        }
-        // Toggle removal
-        KeyCode::Char('d') | KeyCode::Delete => {
-            if let Some(i) = app.dict_list_state.selected() {
-                let entry = &mut app.current_dict_entries_mut()[i];
-                match entry.status {
-                    GroupStatus::Default => {
-                        entry.status = GroupStatus::Removed;
-                        app.dirty = true;
+
+    match app.dict_panel_focus {
+        panel::PanelFocus::Table => {
+            match code {
+                // Sub-tab navigation
+                KeyCode::Right => {
+                    app.dict_tab_index = (app.dict_tab_index + 1) % num_tables;
+                    let len = app.current_dict_entries().len();
+                    app.dict_list_state
+                        .select(if len > 0 { Some(0) } else { None });
+                }
+                KeyCode::Left => {
+                    app.dict_tab_index = if app.dict_tab_index == 0 {
+                        num_tables - 1
+                    } else {
+                        app.dict_tab_index - 1
+                    };
+                    let len = app.current_dict_entries().len();
+                    app.dict_list_state
+                        .select(if len > 0 { Some(0) } else { None });
+                }
+                // Entry navigation
+                KeyCode::Down => {
+                    let len = app.current_dict_entries().len();
+                    if len > 0 {
+                        let i = app.dict_list_state.selected().unwrap_or(0);
+                        app.dict_list_state.select(Some((i + 1) % len));
                     }
-                    GroupStatus::Removed => {
-                        entry.status = GroupStatus::Default;
-                        app.dirty = true;
+                }
+                KeyCode::Up => {
+                    let len = app.current_dict_entries().len();
+                    if len > 0 {
+                        let i = app.dict_list_state.selected().unwrap_or(0);
+                        app.dict_list_state
+                            .select(Some(if i == 0 { len - 1 } else { i - 1 }));
                     }
-                    GroupStatus::Added => {
-                        // Remove the added entry entirely
-                        app.current_dict_entries_mut().remove(i);
-                        let len = app.current_dict_entries().len();
-                        if len == 0 {
-                            app.dict_list_state.select(None);
-                        } else if i >= len {
-                            app.dict_list_state.select(Some(len - 1));
+                }
+                // Toggle removal
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        let entry = &mut app.current_dict_entries_mut()[i];
+                        match entry.status {
+                            GroupStatus::Default => {
+                                entry.status = GroupStatus::Removed;
+                                app.dirty = true;
+                            }
+                            GroupStatus::Removed => {
+                                entry.status = GroupStatus::Default;
+                                app.dirty = true;
+                            }
+                            GroupStatus::Added => {
+                                // Remove the added entry entirely
+                                app.current_dict_entries_mut().remove(i);
+                                let len = app.current_dict_entries().len();
+                                if len == 0 {
+                                    app.dict_list_state.select(None);
+                                } else if i >= len {
+                                    app.dict_list_state.select(Some(len - 1));
+                                }
+                                app.dirty = true;
+                            }
+                            GroupStatus::Modified => {
+                                // Revert to original values
+                                entry.short = entry.original_short.clone();
+                                entry.long = entry.original_long.clone();
+                                entry.variants = entry.original_variants.clone();
+                                entry.status = GroupStatus::Default;
+                                app.dirty = true;
+                            }
                         }
-                        app.dirty = true;
-                    }
-                    GroupStatus::Modified => {
-                        // Revert to original values
-                        entry.short = entry.original_short.clone();
-                        entry.long = entry.original_long.clone();
-                        entry.variants = entry.original_variants.clone();
-                        entry.status = GroupStatus::Default;
-                        app.dirty = true;
                     }
                 }
-            }
-        }
-        // Add new entry
-        KeyCode::Char('a') => {
-            app.input_mode = InputMode::AddShort(String::new(), 0);
-        }
-        // Drill into group to view/edit variants
-        KeyCode::Enter => {
-            if let Some(i) = app.dict_list_state.selected() {
-                let entry = &app.current_dict_entries()[i];
-                if entry.status != GroupStatus::Removed {
-                    app.input_mode = InputMode::EditVariants(i, 0);
+                // Add new entry
+                KeyCode::Char('a') => {
+                    app.input_mode = InputMode::AddShort(String::new(), 0);
                 }
-            }
-        }
-        // Edit long form directly
-        KeyCode::Char('e') => {
-            if let Some(i) = app.dict_list_state.selected() {
-                let entry = &app.current_dict_entries()[i];
-                if entry.status != GroupStatus::Removed {
-                    let cursor = entry.long.len();
-                    app.input_mode = InputMode::EditLong(i, entry.long.clone(), cursor);
+                // Drill into detail panel
+                KeyCode::Enter => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        let entry = &app.current_dict_entries()[i];
+                        if entry.status != GroupStatus::Removed {
+                            app.dict_panel_focus = panel::PanelFocus::Detail;
+                        }
+                    }
                 }
+                // Edit long form directly
+                KeyCode::Char('e') => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        let entry = &app.current_dict_entries()[i];
+                        if entry.status != GroupStatus::Removed {
+                            let cursor = entry.long.len();
+                            app.input_mode = InputMode::EditLong(i, entry.long.clone(), cursor);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        _ => {}
+        panel::PanelFocus::Detail => {
+            // Detail panel: variant list for selected group
+            match code {
+                KeyCode::Esc | KeyCode::Left => {
+                    app.dict_panel_focus = panel::PanelFocus::Table;
+                }
+                // Add variant
+                KeyCode::Char('a') => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        app.input_mode = InputMode::AddVariant(i, String::new(), 0);
+                    }
+                }
+                // Delete variant (uses the EditVariants modal to pick which one)
+                KeyCode::Enter => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        let entry = &app.current_dict_entries()[i];
+                        if entry.status != GroupStatus::Removed {
+                            app.input_mode = InputMode::EditVariants(i, 0);
+                        }
+                    }
+                }
+                // Edit long form
+                KeyCode::Char('e') => {
+                    if let Some(i) = app.dict_list_state.selected() {
+                        let entry = &app.current_dict_entries()[i];
+                        if entry.status != GroupStatus::Removed {
+                            let cursor = entry.long.len();
+                            app.input_mode = InputMode::EditLong(i, entry.long.clone(), cursor);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -680,31 +719,60 @@ pub(crate) fn handle_input_mode(app: &mut App, code: KeyCode) {
 pub(crate) fn handle_output_key(app: &mut App, code: KeyCode) {
     use crate::config::OutputFormat;
     let len = app.output_settings.len();
-    match code {
-        KeyCode::Down => {
-            if len > 0 {
-                let i = app.output_list_state.selected().unwrap_or(0);
-                app.output_list_state.select(Some((i + 1) % len));
+
+    match app.output_panel_focus {
+        panel::PanelFocus::Table => {
+            match code {
+                KeyCode::Down => {
+                    if len > 0 {
+                        let i = app.output_list_state.selected().unwrap_or(0);
+                        app.output_list_state.select(Some((i + 1) % len));
+                    }
+                }
+                KeyCode::Up => {
+                    if len > 0 {
+                        let i = app.output_list_state.selected().unwrap_or(0);
+                        app.output_list_state
+                            .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+                    }
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(i) = app.output_list_state.selected() {
+                        let setting = &mut app.output_settings[i];
+                        setting.format = match setting.format {
+                            OutputFormat::Short => OutputFormat::Long,
+                            OutputFormat::Long => OutputFormat::Short,
+                        };
+                        app.dirty = true;
+                    }
+                }
+                KeyCode::Enter | KeyCode::Right => {
+                    if app.output_list_state.selected().is_some() {
+                        app.output_panel_focus = panel::PanelFocus::Detail;
+                    }
+                }
+                _ => {}
             }
         }
-        KeyCode::Up => {
-            if len > 0 {
-                let i = app.output_list_state.selected().unwrap_or(0);
-                app.output_list_state
-                    .select(Some(if i == 0 { len - 1 } else { i - 1 }));
+        panel::PanelFocus::Detail => {
+            match code {
+                KeyCode::Esc | KeyCode::Left => {
+                    app.output_panel_focus = panel::PanelFocus::Table;
+                }
+                // Toggle between Short/Long in detail view
+                KeyCode::Up | KeyCode::Down | KeyCode::Char(' ') | KeyCode::Enter => {
+                    if let Some(i) = app.output_list_state.selected() {
+                        let setting = &mut app.output_settings[i];
+                        setting.format = match setting.format {
+                            OutputFormat::Short => OutputFormat::Long,
+                            OutputFormat::Long => OutputFormat::Short,
+                        };
+                        app.dirty = true;
+                    }
+                }
+                _ => {}
             }
         }
-        KeyCode::Char(' ') => {
-            if let Some(i) = app.output_list_state.selected() {
-                let setting = &mut app.output_settings[i];
-                setting.format = match setting.format {
-                    OutputFormat::Short => OutputFormat::Long,
-                    OutputFormat::Long => OutputFormat::Short,
-                };
-                app.dirty = true;
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1104,7 +1172,10 @@ fn handle_form_text_edit(app: &mut App, code: KeyCode) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::widgets;
+    use super::panel::{self, PanelFocus};
+
+    let (table_inner, detail_inner) =
+        panel::render_panel_frame(frame, area, PanelFocus::Table, "Pipeline Steps");
 
     let rows: Vec<Row> = app
         .steps
@@ -1143,9 +1214,6 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
                 .map(|m| m.display)
                 .unwrap_or(r.step_type());
 
-            // Input column
-            let input = r.def.input_col.as_deref().unwrap_or("(working)");
-
             // Output column
             let output = match &r.def.output_col {
                 Some(OutputCol::Single(name)) => name.clone(),
@@ -1157,28 +1225,16 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
                 None => "\u{2014}".to_string(), // em-dash
             };
 
-            // Pattern/table (truncated)
-            let pattern = if let Some(tbl) = &r.def.table {
-                format!("{{{}}}", tbl)
-            } else {
-                r.def.pattern.as_deref().unwrap_or("").to_string()
-            };
-            let pattern_truncated = widgets::truncate(&pattern, 30);
-
             Row::new(vec![
                 Cell::from(Line::from(check)),
                 Cell::from(label).style(style),
                 Cell::from(type_display),
-                Cell::from(input.to_string()),
                 Cell::from(output),
-                Cell::from(pattern_truncated).style(
-                    if is_moving { style } else { Style::new().fg(Color::DarkGray) }
-                ),
             ])
         })
         .collect();
 
-    let header = Row::new(vec!["", "Label", "Type", "Input", "Output", "Pattern"])
+    let header = Row::new(vec!["", "Label", "Type", "Output"])
         .style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .bottom_margin(1);
 
@@ -1186,14 +1242,11 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1),   // check
         Constraint::Min(16),     // label
         Constraint::Length(11),  // type
-        Constraint::Length(12),  // input
-        Constraint::Length(14),  // output
-        Constraint::Fill(1),     // pattern (remaining)
+        Constraint::Fill(1),     // output
     ];
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::bordered().title("Pipeline Steps"))
         .row_highlight_style(
             Style::new()
                 .bg(Color::DarkGray)
@@ -1201,11 +1254,98 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(table, area, &mut app.steps_list_state);
+    frame.render_stateful_widget(table, table_inner, &mut app.steps_list_state);
+
+    // Detail panel: show selected step properties
+    render_step_detail(frame, app, detail_inner);
+}
+
+fn render_step_detail(frame: &mut Frame, app: &App, area: Rect) {
+    let selected = app.steps_list_state.selected();
+    let Some(idx) = selected else {
+        let empty = Paragraph::new("No step selected")
+            .style(Style::new().fg(Color::DarkGray));
+        frame.render_widget(empty, area);
+        return;
+    };
+    let Some(step) = app.steps.get(idx) else { return };
+    let def = &step.def;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Type
+    let type_display = super::meta::find_step_type(step.step_type())
+        .map(|m| m.display)
+        .unwrap_or(step.step_type());
+    lines.push(detail_line("Type", type_display));
+
+    // Pattern
+    if let Some(pat) = &def.pattern {
+        lines.push(detail_line("Pattern", pat));
+    }
+
+    // Table
+    if let Some(tbl) = &def.table {
+        lines.push(detail_line("Table", tbl));
+    }
+
+    // Output col
+    match &def.output_col {
+        Some(OutputCol::Single(s)) => {
+            lines.push(detail_line("Output", s));
+        }
+        Some(OutputCol::Multi(m)) => {
+            let mut pairs: Vec<_> = m.iter().collect();
+            pairs.sort_by_key(|(_, v)| *v);
+            let val = pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
+            lines.push(detail_line("Output", &val));
+        }
+        None => {}
+    }
+
+    // Input col
+    if let Some(input) = &def.input_col {
+        lines.push(detail_line("Input", input));
+    }
+
+    // Replacement
+    if let Some(repl) = &def.replacement {
+        lines.push(detail_line("Replacement", repl));
+    }
+
+    // Skip if filled
+    if def.skip_if_filled == Some(true) {
+        lines.push(detail_line("Skip if filled", "yes"));
+    }
+
+    // Mode
+    if let Some(mode) = &def.mode {
+        lines.push(detail_line("Mode", mode));
+    }
+
+    // Enabled
+    let enabled_str = if step.enabled { "\u{2713}" } else { "\u{2717}" };
+    lines.push(detail_line("Enabled", enabled_str));
+
+    // Label
+    lines.push(detail_line("Label", &def.label));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
+fn detail_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:16}", label),
+            Style::new().fg(Color::Cyan),
+        ),
+        Span::raw(value.to_string()),
+    ])
 }
 
 pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
-    let [subtab_area, entries_area] = Layout::vertical([
+    let [subtab_area, panel_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Fill(1),
     ])
@@ -1280,7 +1420,16 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
         .divider(" | ");
     frame.render_widget(subtabs, subtab_area);
 
-    // Entries — build items from immutable borrow, then drop it before mutable borrow
+    // Two-panel layout below subtabs
+    let table_name = app.table_names[app.dict_tab_index].clone();
+    let (table_inner, detail_inner) = panel::render_panel_frame(
+        frame,
+        panel_area,
+        app.dict_panel_focus,
+        &format!("{} entries", table_name),
+    );
+
+    // Check if this is a value-list table
     let is_value_list = {
         let tables = build_default_tables();
         tables
@@ -1289,97 +1438,255 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
             .unwrap_or(false)
     };
 
-    let (items, table_name) = {
+    // Build table rows from entries, capture selected entry for detail panel
+    let (rows, selected_entry) = {
         let entries = app.current_dict_entries();
-        let items: Vec<ListItem> = entries
+
+        let rows: Vec<Row> = entries
             .iter()
             .map(|e| {
-                let (marker, style) = match e.status {
-                    GroupStatus::Default => ("\u{2605} ", Style::new()),
-                    GroupStatus::Added => ("\u{2605} ", Style::new().fg(Color::Green)),
-                    GroupStatus::Removed => ("\u{2605} ", Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT)),
-                    GroupStatus::Modified => ("\u{2605} ", Style::new().fg(Color::Yellow)),
+                let (status_str, style) = match e.status {
+                    GroupStatus::Default => ("Default", Style::new()),
+                    GroupStatus::Added => ("Added", Style::new().fg(Color::Green)),
+                    GroupStatus::Removed => ("Removed", Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT)),
+                    GroupStatus::Modified => ("Modified", Style::new().fg(Color::Yellow)),
                 };
-                let variants_str = if e.variants.is_empty() {
-                    String::new()
-                } else {
-                    format!("    {}", e.variants.join(", "))
-                };
+                let variant_count = format!("{}", e.variants.len());
                 if is_value_list {
-                    ListItem::new(Line::from(vec![
-                        Span::styled(marker, style),
-                        Span::styled(e.short.clone(), style),
-                    ]))
+                    Row::new(vec![
+                        Cell::from(e.short.clone()),
+                        Cell::from(""),
+                        Cell::from(variant_count),
+                        Cell::from(status_str),
+                    ]).style(style)
                 } else {
-                    ListItem::new(Line::from(vec![
-                        Span::styled(marker, style),
-                        Span::styled(format!("{:12}", e.short), style),
-                        Span::styled(format!("{:20}", e.long), style),
-                        Span::styled(variants_str, Style::new().fg(Color::DarkGray)),
-                    ]))
+                    Row::new(vec![
+                        Cell::from(e.short.clone()),
+                        Cell::from(e.long.clone()),
+                        Cell::from(variant_count),
+                        Cell::from(status_str),
+                    ]).style(style)
                 }
             })
             .collect();
-        let table_name = app.table_names[app.dict_tab_index].clone();
-        (items, table_name)
+
+        // Capture selected entry info for detail panel before dropping entries borrow
+        let selected = app.dict_list_state.selected().and_then(|i| {
+            entries.get(i).map(|e| (e.short.clone(), e.long.clone(), e.variants.clone(), e.status.clone()))
+        });
+
+        (rows, selected)
     };
 
-    let list = List::new(items)
-        .block(Block::bordered().title(format!("{} entries", table_name)))
-        .highlight_style(
+    let widths = [
+        Constraint::Percentage(20),
+        Constraint::Percentage(35),
+        Constraint::Percentage(15),
+        Constraint::Percentage(30),
+    ];
+
+    let header = Row::new(vec![
+        Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Status").style(Style::new().add_modifier(Modifier::BOLD)),
+    ]).style(Style::new().fg(Color::Cyan));
+
+    let table_widget = Table::new(rows, widths)
+        .header(header)
+        .row_highlight_style(
             Style::new()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, entries_area, &mut app.dict_list_state);
+    frame.render_stateful_widget(table_widget, table_inner, &mut app.dict_list_state);
+
+    // Right panel: variant detail for selected entry
+    if let Some((short, long, variants, status)) = selected_entry {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled(&short, Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                if !long.is_empty() {
+                    Span::raw(format!(" -> {}", long))
+                } else {
+                    Span::raw("")
+                },
+            ]),
+            Line::from(vec![
+                Span::styled("Status: ", Style::new().fg(Color::DarkGray)),
+                Span::styled(
+                    match status {
+                        GroupStatus::Default => "Default",
+                        GroupStatus::Added => "Added",
+                        GroupStatus::Removed => "Removed",
+                        GroupStatus::Modified => "Modified",
+                    },
+                    match status {
+                        GroupStatus::Default => Style::new(),
+                        GroupStatus::Added => Style::new().fg(Color::Green),
+                        GroupStatus::Removed => Style::new().fg(Color::Red),
+                        GroupStatus::Modified => Style::new().fg(Color::Yellow),
+                    },
+                ),
+            ]),
+            Line::raw(""),
+            Line::styled("Variants:", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ];
+
+        if variants.is_empty() {
+            lines.push(Line::styled("  (none)", Style::new().fg(Color::DarkGray)));
+        } else {
+            for v in &variants {
+                lines.push(Line::from(format!("  {}", v)));
+            }
+        }
+
+        lines.push(Line::raw(""));
+        if app.dict_panel_focus == panel::PanelFocus::Detail {
+            lines.push(Line::styled(
+                "Enter: edit variants | a: add | e: edit long | Esc: back",
+                Style::new().fg(Color::DarkGray),
+            ));
+        } else {
+            lines.push(Line::styled(
+                "Enter: detail panel",
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+
+        let detail = Paragraph::new(lines).wrap(Wrap { trim: false });
+        frame.render_widget(detail, detail_inner);
+    } else {
+        let detail = Paragraph::new("No entry selected")
+            .style(Style::new().fg(Color::DarkGray));
+        frame.render_widget(detail, detail_inner);
+    }
 }
 
 pub(crate) fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
     use crate::config::OutputFormat;
 
-    let items: Vec<ListItem> = app
+    let (table_inner, detail_inner) = panel::render_panel_frame(
+        frame,
+        area,
+        app.output_panel_focus,
+        "Output Format",
+    );
+
+    // Build table rows
+    let rows: Vec<Row> = app
         .output_settings
         .iter()
         .map(|s| {
             let is_modified = s.format != s.default_format;
             let format_str = match s.format {
-                OutputFormat::Short => "short",
-                OutputFormat::Long => "long",
+                OutputFormat::Short => "Short",
+                OutputFormat::Long => "Long",
             };
             let example = match s.format {
                 OutputFormat::Short => &s.example_short,
                 OutputFormat::Long => &s.example_long,
             };
-            let marker = if is_modified { "~ " } else { "  " };
             let style = if is_modified {
                 Style::new().fg(Color::Yellow)
             } else {
                 Style::new()
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(marker, style),
-                Span::styled(format!("{:20}", s.component), style),
-                Span::styled(
-                    format!("{:8}", format_str),
-                    Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!("({})", example), Style::new().fg(Color::DarkGray)),
-            ]))
+            Row::new(vec![
+                Cell::from(s.component.clone()),
+                Cell::from(format_str),
+                Cell::from(example.clone()),
+            ]).style(style)
         })
         .collect();
 
-    let list = List::new(items)
-        .block(Block::bordered().title("Output Format (Space to toggle)"))
-        .highlight_style(
+    let widths = [
+        Constraint::Percentage(40),
+        Constraint::Percentage(25),
+        Constraint::Percentage(35),
+    ];
+
+    let header = Row::new(vec![
+        Cell::from("Component").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Format").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Example").style(Style::new().add_modifier(Modifier::BOLD)),
+    ]).style(Style::new().fg(Color::Cyan));
+
+    let table_widget = Table::new(rows, widths)
+        .header(header)
+        .row_highlight_style(
             Style::new()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
 
-    frame.render_stateful_widget(list, area, &mut app.output_list_state);
+    frame.render_stateful_widget(table_widget, table_inner, &mut app.output_list_state);
+
+    // Right panel: format detail for selected component
+    if let Some(i) = app.output_list_state.selected() {
+        let s = &app.output_settings[i];
+        let is_short = s.format == OutputFormat::Short;
+        let is_modified = s.format != s.default_format;
+
+        let short_marker = if is_short { ">" } else { " " };
+        let long_marker = if !is_short { ">" } else { " " };
+
+        let short_style = if is_short {
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        let long_style = if !is_short {
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+
+        let mut lines = vec![
+            Line::styled(
+                &s.component,
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Line::raw(""),
+        ];
+
+        if is_modified {
+            lines.push(Line::styled("(modified from default)", Style::new().fg(Color::Yellow)));
+            lines.push(Line::raw(""));
+        }
+
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} Short  ", short_marker), short_style),
+            Span::styled(format!("({})", s.example_short), Style::new().fg(Color::DarkGray)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {} Long   ", long_marker), long_style),
+            Span::styled(format!("({})", s.example_long), Style::new().fg(Color::DarkGray)),
+        ]));
+
+        lines.push(Line::raw(""));
+        if app.output_panel_focus == panel::PanelFocus::Detail {
+            lines.push(Line::styled(
+                "Up/Down/Space: toggle | Esc: back",
+                Style::new().fg(Color::DarkGray),
+            ));
+        } else {
+            lines.push(Line::styled(
+                "Space: toggle | Enter: detail",
+                Style::new().fg(Color::DarkGray),
+            ));
+        }
+
+        let detail = Paragraph::new(lines).wrap(Wrap { trim: false });
+        frame.render_widget(detail, detail_inner);
+    } else {
+        let detail = Paragraph::new("No component selected")
+            .style(Style::new().fg(Color::DarkGray));
+        frame.render_widget(detail, detail_inner);
+    }
 }
 
 pub(crate) fn render_step_form(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -1388,12 +1695,16 @@ pub(crate) fn render_step_form(frame: &mut Frame, app: &mut App, area: Rect) {
         None => return,
     };
 
+    // Centered overlay on top of the steps table
+    let overlay = super::centered_rect_pct(80, 80, area);
+    frame.render_widget(ratatui::widgets::Clear, overlay);
+
     let step_state = form.step_index.map(|i| &app.steps[i]);
 
     let [header_area, body_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Fill(1),
-    ]).areas(area);
+    ]).areas(overlay);
 
     // Header
     let type_str = form.def.step_type.to_uppercase();
@@ -1427,7 +1738,7 @@ pub(crate) fn render_step_form(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Discard confirmation overlay
     if form.show_discard_prompt {
-        let popup = super::centered_rect(50, 5, area);
+        let popup = super::centered_rect(50, 5, overlay);
         frame.render_widget(ratatui::widgets::Clear, popup);
         let msg = Paragraph::new(vec![
             Line::from(""),

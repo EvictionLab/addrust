@@ -56,12 +56,14 @@ pub(crate) struct App {
     pub(crate) dict_tab_index: usize,
     /// Dictionary entries per table, with change tracking.
     pub(crate) dict_entries: Vec<Vec<DictGroupState>>,
-    pub(crate) dict_list_state: ratatui::widgets::ListState,
+    pub(crate) dict_list_state: ratatui::widgets::TableState,
+    pub(crate) dict_panel_focus: panel::PanelFocus,
     pub(crate) input_mode: InputMode,
 
     // -- Output tab --
     pub(crate) output_settings: Vec<OutputSettingState>,
-    pub(crate) output_list_state: ratatui::widgets::ListState,
+    pub(crate) output_list_state: ratatui::widgets::TableState,
+    pub(crate) output_panel_focus: panel::PanelFocus,
 
     // -- Step editor form --
     /// Step editor form state (when open).
@@ -228,7 +230,7 @@ impl App {
             })
             .collect();
 
-        let mut dict_list_state = ratatui::widgets::ListState::default();
+        let mut dict_list_state = ratatui::widgets::TableState::default();
         if !dict_entries.is_empty() && !dict_entries[0].is_empty() {
             dict_list_state.select(Some(0));
         }
@@ -272,7 +274,7 @@ impl App {
                 example_long: "NEW YORK".to_string(),
             },
         ];
-        let mut output_list_state = ratatui::widgets::ListState::default();
+        let mut output_list_state = ratatui::widgets::TableState::default();
         output_list_state.select(Some(0));
 
         App {
@@ -288,9 +290,11 @@ impl App {
             dict_tab_index: 0,
             dict_entries,
             dict_list_state,
+            dict_panel_focus: panel::PanelFocus::Table,
             input_mode: InputMode::Normal,
             output_settings,
             output_list_state,
+            output_panel_focus: panel::PanelFocus::Table,
             confirm_delete: None,
             form_state: None,
         }
@@ -582,10 +586,9 @@ fn render(frame: &mut Frame, app: &mut App) {
     // Content
     match app.active_tab {
         Tab::Steps => {
+            tabs::render_steps(frame, app, content_area);
             if app.form_state.is_some() {
                 tabs::render_step_form(frame, app, content_area);
-            } else {
-                tabs::render_steps(frame, app, content_area);
             }
         }
         Tab::Dictionaries => tabs::render_dict(frame, app, content_area),
@@ -708,6 +711,26 @@ fn render(frame: &mut Frame, app: &mut App) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+pub(crate) fn centered_rect_pct(
+    percent_x: u16,
+    percent_y: u16,
+    area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let [_, center_v, _] = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .areas(area);
+    let [_, center_h, _] = Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .areas(center_v);
+    center_h
+}
 
 pub(crate) fn centered_rect(
     percent_x: u16,
