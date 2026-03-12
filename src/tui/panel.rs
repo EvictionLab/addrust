@@ -159,7 +159,8 @@ pub(crate) fn render_step_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         _ => 0,
     };
-    let content_lines = 1 + panel.visible_fields.len() as u16 + dropdown_lines;
+    // type selector (1) + blank line (1) + fields + dropdown + body border (2)
+    let content_lines = 2 + panel.visible_fields.len() as u16 + dropdown_lines + 2;
     let overlay = centered_overlay(area, content_lines);
     frame.render_widget(Clear, overlay);
 
