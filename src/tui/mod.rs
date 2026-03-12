@@ -18,8 +18,8 @@ use crate::config::{Config, DictEntry, DictOverrides};
 use crate::tables::abbreviations::build_default_tables;
 
 use tabs::{
-    DictGroupState, FormState, GroupStatus, InputMode, OutputSettingState, StepState,
-    handle_dict_key, handle_form_key, handle_input_mode, handle_output_key, handle_rules_key,
+    DictGroupState, GroupStatus, InputMode, OutputSettingState, StepState,
+    handle_dict_key, handle_input_mode, handle_output_key, handle_rules_key,
     render_text_with_cursor,
 };
 
@@ -63,9 +63,9 @@ pub(crate) struct App {
     pub(crate) output_settings: Vec<OutputSettingState>,
     pub(crate) output_list_state: ratatui::widgets::TableState,
 
-    // -- Step editor form --
-    /// Step editor form state (when open).
-    pub(crate) form_state: Option<FormState>,
+    // -- Step/dict editor panel --
+    /// Panel overlay state (step or dict editor).
+    pub(crate) panel: Option<panel::PanelKind>,
     /// If Some, we're showing delete confirmation for a custom step at this index.
     pub(crate) confirm_delete: Option<usize>,
 }
@@ -292,7 +292,7 @@ impl App {
             output_settings,
             output_list_state,
             confirm_delete: None,
-            form_state: None,
+            panel: None,
         }
     }
 
@@ -510,9 +510,12 @@ fn run_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 continue;
             }
 
-            // Form mode: form consumes all keys (including Esc, Tab, s)
-            if app.form_state.is_some() {
-                handle_form_key(app, key.code);
+            // Panel mode: panel consumes all keys
+            if let Some(ref panel_kind) = app.panel {
+                match panel_kind {
+                    panel::PanelKind::Step(_) => panel::handle_step_panel_key(app, key.code),
+                    panel::PanelKind::Dict(_) => panel::handle_dict_panel_key(app, key.code),
+                }
                 continue;
             }
 
@@ -583,11 +586,16 @@ fn render(frame: &mut Frame, app: &mut App) {
     match app.active_tab {
         Tab::Steps => {
             tabs::render_steps(frame, app, content_area);
-            if app.form_state.is_some() {
-                tabs::render_step_form(frame, app, content_area);
+            if matches!(&app.panel, Some(panel::PanelKind::Step(_))) {
+                panel::render_step_panel(frame, app, content_area);
             }
         }
-        Tab::Dictionaries => tabs::render_dict(frame, app, content_area),
+        Tab::Dictionaries => {
+            tabs::render_dict(frame, app, content_area);
+            if matches!(&app.panel, Some(panel::PanelKind::Dict(_))) {
+                panel::render_dict_panel(frame, app, content_area);
+            }
+        }
         Tab::Output => tabs::render_output(frame, app, content_area),
     }
 
