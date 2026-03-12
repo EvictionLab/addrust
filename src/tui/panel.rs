@@ -102,8 +102,10 @@ pub(crate) fn centered_overlay(area: Rect, content_lines: u16) -> Rect {
 }
 
 /// Compute visible fields for a step type.
+/// Falls back to "extract" if step_type is empty or unknown.
 pub(crate) fn visible_fields_for_type(step_type: &str) -> Vec<StepField> {
-    let meta = meta::find_step_type(step_type);
+    let effective = if step_type.is_empty() { "extract" } else { step_type };
+    let meta = meta::find_step_type(effective);
     match meta {
         Some(m) => m.visible.iter().filter_map(|pk| match pk {
             PropKey::Label => Some(StepField::Label),

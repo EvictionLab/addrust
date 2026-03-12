@@ -229,12 +229,19 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
         KeyCode::Enter => {
             if let Some(i) = app.steps_list_state.selected() {
                 let step = &app.steps[i];
-                let visible = super::panel::visible_fields_for_type(&step.def.step_type);
+                let step_type = if step.def.step_type.is_empty() {
+                    "extract".to_string()
+                } else {
+                    step.def.step_type.clone()
+                };
+                let visible = super::panel::visible_fields_for_type(&step_type);
                 let segments = crate::pattern::parse_pattern(
                     step.def.pattern.as_deref().unwrap_or(""));
+                let mut def = step.def.clone();
+                def.step_type = step_type;
                 app.panel = Some(super::panel::PanelKind::Step(super::panel::StepPanelState {
                     step_index: Some(i),
-                    def: step.def.clone(),
+                    def,
                     visible_fields: visible,
                     field_cursor: 0,
                     focus: super::panel::PanelFocus::Navigating,
