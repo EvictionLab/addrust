@@ -209,7 +209,7 @@ step_order = ["na_check", "city_state_zip", "po_box", "custom_po_box_digits"]
 type = "extract"
 label = "custom_po_box_digits"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#,
     )
@@ -252,7 +252,7 @@ disabled = ["custom_po_box_digits"]
 type = "extract"
 label = "custom_po_box_digits"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#,
     )
@@ -291,7 +291,7 @@ step_order = ["na_check", "custom_box", "po_box"]
 type = "extract"
 label = "custom_box"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
@@ -373,7 +373,7 @@ fn test_invalid_custom_step_skipped_gracefully() {
 type = "extract"
 label = "bad_step"
 pattern = '(?P<unclosed'
-target = "po_box"
+output_col = "po_box"
 "#,
     )
     .unwrap();
@@ -462,7 +462,7 @@ pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
 skip_if_filled = false
 
 [steps.step_overrides.unit_type_value]
-target = "unit"
+output_col = "unit"
 "#,
     )
     .unwrap();
@@ -471,7 +471,7 @@ target = "unit"
     assert_eq!(po_box.pattern.as_deref(), Some(r"\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b"));
     assert_eq!(po_box.skip_if_filled, Some(false));
     let utv = &config.steps.step_overrides["unit_type_value"];
-    assert_eq!(utv.target.as_deref(), Some("unit"));
+    assert!(matches!(&utv.output_col, Some(addrust::step::OutputCol::Single(s)) if s == "unit"));
     assert!(utv.pattern.is_none());
 }
 

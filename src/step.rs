@@ -401,6 +401,13 @@ pub fn apply_step(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OutputCol {
+    Single(String),
+    Multi(std::collections::HashMap<String, usize>),
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq)]
 pub struct StepDef {
     #[serde(rename = "type")]
@@ -411,23 +418,15 @@ pub struct StepDef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
+    pub output_col: Option<OutputCol>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_if_filled: Option<bool>,
-    /// Deprecated: use `table` instead. Kept for backward compat with user configs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub matching_table: Option<String>,
-    /// Deprecated: ignored. Use `table` instead. Kept for backward compat deserialization.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub format_table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub targets: Option<std::collections::HashMap<String, usize>>,
+    pub input_col: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,6 +436,21 @@ pub struct StepsDef {
 
 /// Compile a single StepDef into a Step, expanding table references in patterns.
 pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String> {
+    // Parse output_col into (target, targets) for the compiled Step
+    let (parsed_target, parsed_targets) = match &def.output_col {
+        Some(OutputCol::Single(name)) => (Some(Col::from_key(name)?), None),
+        Some(OutputCol::Multi(map)) => {
+            let mut parsed = std::collections::HashMap::new();
+            for (col_name, group_num) in map {
+                parsed.insert(Col::from_key(col_name)?, *group_num);
+            }
+            (None, Some(parsed))
+        }
+        None => (None, None),
+    };
+
+    let source = def.input_col.as_ref().map(|s| Col::from_key(s)).transpose()?;
+
     match def.step_type.as_str() {
         "rewrite" => {
             let template = def
@@ -446,7 +460,6 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let expanded = expand_template(template, abbr);
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-            let source = def.source.as_ref().map(|s| Col::from_key(s)).transpose()?;
             Ok(Step::Rewrite {
                 label: def.label.clone(),
                 pattern,
@@ -483,36 +496,16 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             let pattern = Regex::new(&expanded)
                 .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
 
-            let targets = if let Some(ref t) = def.targets {
-                let mut map = std::collections::HashMap::new();
-                for (field_name, group_num) in t {
-                    map.insert(Col::from_key(field_name)?, *group_num);
-                }
-                Some(map)
-            } else {
-                None
-            };
-
-            let target = if targets.is_some() {
-                if def.target.is_some() {
-                    return Err(format!("extract step '{}' has both target and targets", def.label));
-                }
+            if parsed_targets.is_some() {
                 if def.replacement.is_some() {
-                    return Err(format!("extract step '{}' has both targets and replacement", def.label));
+                    return Err(format!("extract step '{}' has both multi output_col and replacement", def.label));
                 }
-                None
-            } else {
-                Some(Col::from_key(
-                    def.target
-                        .as_ref()
-                        .ok_or_else(|| format!("extract step '{}' missing target or targets", def.label))?
-                )?)
-            };
+            } else if parsed_target.is_none() {
+                return Err(format!("extract step '{}' missing output_col", def.label));
+            }
 
             let replacement = if let Some(ref r) = def.replacement {
                 let expanded_r = expand_template(r, abbr);
-                // The extract pattern serves as the match regex for replacement;
-                // the replacement field is the substitution template.
                 Some((
                     Regex::new(&expanded).map_err(|e| {
                         format!("Bad replacement regex in step '{}': {}", def.label, e)
@@ -523,13 +516,12 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 None
             };
 
-            let source = def.source.as_ref().map(|s| Col::from_key(s)).transpose()?;
             Ok(Step::Extract {
                 label: def.label.clone(),
                 pattern,
                 pattern_template: template,
-                target,
-                targets,
+                target: parsed_target,
+                targets: parsed_targets,
                 skip_if_filled: def.skip_if_filled.unwrap_or(false),
                 replacement,
                 source,
@@ -537,10 +529,11 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
             })
         }
         "standardize" => {
-            let target = def
-                .target
-                .as_ref()
-                .ok_or_else(|| format!("standardize step '{}' missing target", def.label))?;
+            let target = parsed_target
+                .ok_or_else(|| format!("standardize step '{}' missing output_col", def.label))?;
+            if parsed_targets.is_some() {
+                return Err(format!("standardize step '{}' cannot use multi output_col", def.label));
+            }
             let mode = match def.mode.as_deref() {
                 Some("per_word") => StandardizeMode::PerWord,
                 _ => StandardizeMode::WholeField,
@@ -558,7 +551,6 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
             let table = if pattern.is_none() {
                 def.table.clone()
-                    .or(def.matching_table.clone()) // backward compat: accept old field name
                     .ok_or_else(|| format!(
                         "standardize step '{}' needs either pattern+replacement or table",
                         def.label
@@ -569,7 +561,7 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
             Ok(Step::Standardize {
                 label: def.label.clone(),
-                target: Col::from_key(target)?,
+                target,
                 table,
                 pattern,
                 mode,
@@ -628,9 +620,7 @@ mod tests {
             label: "test_rewrite".to_string(),
             pattern: Some(r"STAPT".to_string()),
             replacement: Some("ST APT".to_string()),
-            table: None, target: None, source: None,
-            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
-            targets: None,
+            ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 N STAPT 4B".to_string());
@@ -670,11 +660,9 @@ table = "street_name_abbr"
             step_type: "extract".to_string(),
             label: "test_number".to_string(),
             pattern: Some(r"^\d+\b".to_string()),
-            replacement: None,
-            table: None, target: Some("street_number".to_string()), source: None,
+            output_col: Some(OutputCol::Single("street_number".to_string())),
             skip_if_filled: Some(true),
-            matching_table: None, format_table: None, mode: None,
-            targets: None,
+            ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
@@ -693,15 +681,9 @@ table = "street_name_abbr"
         let def = StepDef {
             step_type: "standardize".to_string(),
             label: "std_suffix".to_string(),
-            pattern: None, replacement: None,
             table: Some("suffix_all".to_string()),
-            source: None,
-            target: Some("suffix".to_string()),
-            skip_if_filled: None,
-            matching_table: None,
-            format_table: None,
-            mode: None,
-            targets: None,
+            output_col: Some(OutputCol::Single("suffix".to_string())),
+            ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
         let output = OutputConfig::default();
@@ -774,21 +756,15 @@ table = "street_name_abbr"
             step_type: "extract".to_string(),
             label: "custom_box".to_string(),
             pattern: Some(r"\bBOX (\d+)".to_string()),
-            table: None,
-            target: Some("po_box".to_string()),
-            replacement: None,
-            source: None,
+            output_col: Some(OutputCol::Single("po_box".to_string())),
             skip_if_filled: Some(true),
-            matching_table: None,
-            format_table: None,
-            mode: None,
-            targets: None,
+            ..Default::default()
         };
         let toml_str = toml::to_string_pretty(&def).unwrap();
         let parsed: StepDef = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.step_type, "extract");
         assert_eq!(parsed.label, "custom_box");
-        assert_eq!(parsed.target.as_deref(), Some("po_box"));
+        assert!(matches!(&parsed.output_col, Some(OutputCol::Single(s)) if s == "po_box"));
         // Optional None fields should not appear in serialized output
         assert!(!toml_str.contains("table"));
         assert!(!toml_str.contains("replacement"));
@@ -811,9 +787,8 @@ table = "street_name_abbr"
             label: "strip_hash".to_string(),
             pattern: Some(r"^#\s*".to_string()),
             replacement: Some("".to_string()),
-            table: None, target: None, source: Some("unit".to_string()),
-            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
-            targets: None,
+            input_col: Some("unit".to_string()),
+            ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("123 MAIN ST".to_string());
@@ -834,12 +809,10 @@ table = "street_name_abbr"
             step_type: "extract".to_string(),
             label: "promote_unit".to_string(),
             pattern: Some(r"^.+$".to_string()),
-            replacement: None,
-            table: None, target: Some("street_number".to_string()),
-            source: Some("unit".to_string()),
+            output_col: Some(OutputCol::Single("street_number".to_string())),
+            input_col: Some("unit".to_string()),
             skip_if_filled: Some(true),
-            matching_table: None, format_table: None, mode: None,
-            targets: None,
+            ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
         let mut state = AddressState::new_from_prepared("MAIN ST".to_string());
@@ -861,7 +834,7 @@ table = "street_name_abbr"
 type = "extract"
 label = "unit_split"
 pattern = '(APT)\W*(\d+[A-Z]?)\s*$'
-targets = { unit_type = 1, unit = 2 }
+output_col = { unit_type = 1, unit = 2 }
 "#;
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
         let steps = compile_steps(&defs.step, &abbr);
@@ -884,7 +857,7 @@ targets = { unit_type = 1, unit = 2 }
 type = "extract"
 label = "unit_split"
 pattern = '(APT)\W*(\d+)\s*$'
-targets = { unit_type = 1, unit = 2 }
+output_col = { unit_type = 1, unit = 2 }
 skip_if_filled = true
 "#;
         let defs: StepsDef = toml::from_str(toml_str).unwrap();

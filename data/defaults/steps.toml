@@ -92,7 +92,7 @@ replacement = ''
 type = "extract"
 label = "city_state_zip"
 pattern = ',\s*([A-Z][A-Z ]+)\W+{state}\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
-target = "extra_back"
+output_col ="extra_back"
 
 # --- PO Box ---
 # Single extraction captures the full PO BOX text; standardize_po_box reformats it.
@@ -100,7 +100,7 @@ target = "extra_back"
 type = "extract"
 label = "po_box"
 pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+)\b'
-target = "po_box"
+output_col ="po_box"
 skip_if_filled = true
 
 # --- Number-to-word conversion ---
@@ -142,7 +142,7 @@ replacement = '${1}SAINT $2'
 type = "extract"
 label = "extra_front"
 pattern = '^(?:(?:[A-Z\W]+\s)+(?=(?:{direction})\s\d))|^(?:(?:[A-Z\W]+\s)+(?=\d))'
-target = "extra_front"
+output_col ="extra_front"
 skip_if_filled = true
 
 # --- Street number ---
@@ -150,7 +150,7 @@ skip_if_filled = true
 type = "extract"
 label = "street_number_coords"
 pattern = '^([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)\b'
-target = "street_number"
+output_col ="street_number"
 skip_if_filled = true
 replacement = '${1}${2} ${3}${4}'
 
@@ -158,14 +158,14 @@ replacement = '${1}${2} ${3}${4}'
 type = "extract"
 label = "street_number"
 pattern = '^\d+\b'
-target = "street_number"
+output_col ="street_number"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "unit_fraction"
 pattern = '^[1-9]/\d+\b'
-target = "unit"
+output_col ="unit"
 skip_if_filled = true
 
 # --- Unit ---
@@ -173,21 +173,21 @@ skip_if_filled = true
 type = "extract"
 label = "unit_type_value"
 pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$'
-targets = { unit_type = 1, unit = 2 }
+output_col ={ unit_type = 1, unit = 2 }
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "unit_pound"
 pattern = '#\W*(\w+)\s*$'
-target = "unit"
+output_col ="unit"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "unit_location"
 pattern = '\b({unit_location})\s*$'
-target = "unit"
+output_col ="unit"
 skip_if_filled = true
 
 # --- Direction ---
@@ -195,7 +195,7 @@ skip_if_filled = true
 type = "extract"
 label = "post_direction"
 pattern = '(?<!^)\b({direction})\s*$'
-target = "post_direction"
+output_col ="post_direction"
 skip_if_filled = true
 
 # --- Suffix ---
@@ -203,14 +203,14 @@ skip_if_filled = true
 type = "extract"
 label = "suffix_common"
 pattern = '(?<!^)\b({suffix_common})\s*$'
-target = "suffix"
+output_col ="suffix"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "suffix_all"
 pattern = '(?<!^)\b({suffix_all})\s*$'
-target = "suffix"
+output_col ="suffix"
 skip_if_filled = true
 
 # --- Pre-direction ---
@@ -218,7 +218,7 @@ skip_if_filled = true
 type = "extract"
 label = "pre_direction"
 pattern = '^\b({direction})\b(?!$)'
-target = "pre_direction"
+output_col ="pre_direction"
 skip_if_filled = true
 
 # --- Street name cleanup ---
@@ -240,65 +240,65 @@ type = "rewrite"
 label = "strip_unit_hash"
 pattern = '^#\s*'
 replacement = ''
-source = "unit"
+input_col ="unit"
 
 [[step]]
 type = "rewrite"
 label = "strip_leading_zeros_street_number"
 pattern = '^0+(?=\d)'
 replacement = ''
-source = "street_number"
+input_col ="street_number"
 
 [[step]]
 type = "rewrite"
 label = "strip_leading_zeros_unit"
 pattern = '^0+(?=\d)'
 replacement = ''
-source = "unit"
+input_col ="unit"
 
 [[step]]
 type = "extract"
 label = "trailing_number_to_street_number"
 pattern = '\b(\d{1,3})\s*$'
-target = "street_number"
+output_col ="street_number"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "promote_unit_to_street_number"
 pattern = '^.+$'
-source = "unit"
-target = "street_number"
+input_col ="unit"
+output_col ="street_number"
 skip_if_filled = true
 
 # --- Standardization ---
 [[step]]
 type = "standardize"
 label = "standardize_pre_direction"
-target = "pre_direction"
+output_col ="pre_direction"
 table = "direction"
 
 [[step]]
 type = "standardize"
 label = "standardize_post_direction"
-target = "post_direction"
+output_col ="post_direction"
 table = "direction"
 
 [[step]]
 type = "standardize"
 label = "standardize_suffix"
-target = "suffix"
+output_col ="suffix"
 table = "suffix_all"
 
 [[step]]
 type = "standardize"
 label = "standardize_unit_location"
-target = "unit"
+output_col ="unit"
 table = "unit_location"
 
 [[step]]
 type = "standardize"
 label = "standardize_po_box"
-target = "po_box"
+output_col ="po_box"
 pattern = '(?:P\W*O\W*BO?X|POB)\W*(\w+)'
 replacement = 'PO BOX $1'

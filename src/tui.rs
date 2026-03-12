@@ -42,13 +42,11 @@ use crate::address::COL_DEFS;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormField {
     Pattern,
-    TargetMode,   // Extract only: single vs multi
-    Target,       // Single target
-    Targets,      // Multi-target picker
+    OutputCol,    // Output column picker (single or multi)
     SkipIfFilled, // Extract only
     Replacement,
     Table,
-    Source,
+    InputCol,
     Mode,         // Standardize only: whole_field / per_word
     Label,
 }
@@ -58,7 +56,7 @@ enum FormField {
 enum FormFocus {
     Left,          // navigating field list
     RightPattern,  // in pattern drill-down
-    RightTargets,  // in target picker
+    RightOutputCol, // in output column picker
     RightTable,    // in table picker
     EditingText(String, usize, String), // field being text-edited (field_name, cursor, text)
 }
@@ -91,15 +89,10 @@ struct FormState {
 fn visible_fields_for_type(step_type: &str, def: &crate::step::StepDef) -> Vec<FormField> {
     match step_type {
         "extract" => {
-            let mut fields = vec![FormField::Pattern, FormField::TargetMode];
-            if def.targets.is_some() {
-                fields.push(FormField::Targets);
-            } else {
-                fields.push(FormField::Target);
-            }
+            let mut fields = vec![FormField::Pattern, FormField::OutputCol];
             fields.push(FormField::SkipIfFilled);
             fields.push(FormField::Replacement);
-            fields.push(FormField::Source);
+            fields.push(FormField::InputCol);
             fields.push(FormField::Label);
             fields
         }
@@ -110,7 +103,7 @@ fn visible_fields_for_type(step_type: &str, def: &crate::step::StepDef) -> Vec<F
             } else {
                 fields.push(FormField::Replacement);
             }
-            fields.push(FormField::Source);
+            fields.push(FormField::InputCol);
             fields.push(FormField::Label);
             fields
         }
@@ -122,7 +115,7 @@ fn visible_fields_for_type(step_type: &str, def: &crate::step::StepDef) -> Vec<F
             } else {
                 fields.push(FormField::Table);
             }
-            fields.push(FormField::Target);
+            fields.push(FormField::OutputCol);
             fields.push(FormField::Mode);
             fields.push(FormField::Label);
             fields
@@ -201,12 +194,11 @@ impl StepState {
         let Some(default) = &self.default_def else { return false };
         match field {
             "pattern" => self.def.pattern != default.pattern,
-            "target" => self.def.target != default.target,
-            "targets" => self.def.targets != default.targets,
+            "output_col" => self.def.output_col != default.output_col,
             "replacement" => self.def.replacement != default.replacement,
             "skip_if_filled" => self.def.skip_if_filled != default.skip_if_filled,
             "table" => self.def.table != default.table,
-            "source" => self.def.source != default.source,
+            "input_col" => self.def.input_col != default.input_col,
             "mode" => self.def.mode != default.mode,
             "label" => false,
             _ => false,
@@ -506,11 +498,8 @@ impl App {
                 if step.def.pattern != default.pattern {
                     ovr.pattern = step.def.pattern.clone(); has_changes = true;
                 }
-                if step.def.target != default.target {
-                    ovr.target = step.def.target.clone(); has_changes = true;
-                }
-                if step.def.targets != default.targets {
-                    ovr.targets = step.def.targets.clone(); has_changes = true;
+                if step.def.output_col != default.output_col {
+                    ovr.output_col = step.def.output_col.clone(); has_changes = true;
                 }
                 if step.def.replacement != default.replacement {
                     ovr.replacement = step.def.replacement.clone(); has_changes = true;
@@ -521,8 +510,8 @@ impl App {
                 if step.def.table != default.table {
                     ovr.table = step.def.table.clone(); has_changes = true;
                 }
-                if step.def.source != default.source {
-                    ovr.source = step.def.source.clone(); has_changes = true;
+                if step.def.input_col != default.input_col {
+                    ovr.input_col = step.def.input_col.clone(); has_changes = true;
                 }
                 if step.def.mode != default.mode {
                     ovr.mode = step.def.mode.clone(); has_changes = true;
@@ -1639,35 +1628,36 @@ fn render_form_left_panel(frame: &mut Frame, app: &App, area: ratatui::layout::R
 fn field_key(field: FormField) -> &'static str {
     match field {
         FormField::Pattern => "pattern",
-        FormField::TargetMode => "target",
-        FormField::Target => "target",
-        FormField::Targets => "targets",
+        FormField::OutputCol => "output_col",
         FormField::SkipIfFilled => "skip_if_filled",
         FormField::Replacement => "replacement",
         FormField::Table => "table",
-        FormField::Source => "source",
+        FormField::InputCol => "input_col",
         FormField::Mode => "mode",
         FormField::Label => "label",
     }
 }
 
 fn form_field_display(field: FormField, def: &crate::step::StepDef) -> (&'static str, String) {
+    use crate::step::OutputCol;
     match field {
         FormField::Pattern => ("Pattern", def.pattern.as_deref().unwrap_or("(none)").to_string()),
-        FormField::TargetMode => ("Target mode", if def.targets.is_some() { "Multiple targets" } else { "Single target" }.to_string()),
-        FormField::Target => ("Target", def.target.as_deref().unwrap_or("(none)").to_string()),
-        FormField::Targets => {
-            let t = def.targets.as_ref().map(|m| {
-                let mut pairs: Vec<_> = m.iter().collect();
-                pairs.sort_by_key(|(_, v)| *v);
-                pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(", ")
-            }).unwrap_or_default();
-            ("Targets", if t.is_empty() { "(none)".to_string() } else { t })
+        FormField::OutputCol => {
+            let val = match &def.output_col {
+                Some(OutputCol::Single(s)) => s.clone(),
+                Some(OutputCol::Multi(m)) => {
+                    let mut pairs: Vec<_> = m.iter().collect();
+                    pairs.sort_by_key(|(_, v)| *v);
+                    pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ")
+                }
+                None => "(none)".to_string(),
+            };
+            ("Output col", val)
         }
         FormField::SkipIfFilled => ("Skip if filled", if def.skip_if_filled == Some(true) { "yes" } else { "no" }.to_string()),
         FormField::Replacement => ("Replacement", def.replacement.as_deref().unwrap_or("(none)").to_string()),
         FormField::Table => ("Table", def.table.as_deref().unwrap_or("(none)").to_string()),
-        FormField::Source => ("Source", def.source.as_deref().unwrap_or("working string").to_string()),
+        FormField::InputCol => ("Input col", def.input_col.as_deref().unwrap_or("working string").to_string()),
         FormField::Mode => ("Mode", def.mode.as_deref().unwrap_or("whole field").to_string()),
         FormField::Label => ("Label", def.label.clone()),
     }
@@ -1680,7 +1670,7 @@ fn render_form_right_panel(frame: &mut Frame, app: &App, area: ratatui::layout::
 
     match &form.focus {
         FormFocus::RightPattern => { render_form_pattern_panel(frame, app, area); return; }
-        FormFocus::RightTargets => { render_form_targets_panel(frame, app, area); return; }
+        FormFocus::RightOutputCol => { render_form_targets_panel(frame, app, area); return; }
         FormFocus::RightTable => { render_form_table_panel(frame, app, area); return; }
         FormFocus::EditingText(field_name, cursor, text) => {
             render_form_text_edit_panel(frame, field_name, text, *cursor, area);
@@ -1691,7 +1681,7 @@ fn render_form_right_panel(frame: &mut Frame, app: &App, area: ratatui::layout::
 
     match current_field {
         Some(FormField::Pattern) => render_form_pattern_panel(frame, app, area),
-        Some(FormField::Targets) => render_form_targets_panel(frame, app, area),
+        Some(FormField::OutputCol) | Some(FormField::InputCol) => render_form_targets_panel(frame, app, area),
         Some(FormField::Table) => render_form_table_panel(frame, app, area),
         Some(field) => render_form_help_panel(frame, field, &form.def, step_state, area),
         None => {}
@@ -1738,49 +1728,50 @@ fn render_form_help_panel(
     step_state: Option<&StepState>,
     area: ratatui::layout::Rect,
 ) {
-    let (title, help_text, current_value, edit_hint) = match field {
+    use crate::step::OutputCol;
+    let (title, help_text, current_value, edit_hint): (&str, &str, String, &str) = match field {
         FormField::SkipIfFilled => (
             "Skip If Filled",
             "When yes, this step is skipped if the target field(s) already have a value from a previous step.\n\nUse this for extraction steps that should only fire once.",
-            if def.skip_if_filled == Some(true) { "yes" } else { "no" },
+            (if def.skip_if_filled == Some(true) { "yes" } else { "no" }).to_string(),
             "Space to toggle",
         ),
         FormField::Replacement => (
             "Replacement",
             "Text that replaces the matched pattern. Supports backreferences:\n\n  $1        - capture group 1\n  ${N:table} - look up group N in a table\n  ${N/M:fraction} - fraction (group N / group M)",
-            def.replacement.as_deref().unwrap_or("(none)"),
+            def.replacement.as_deref().unwrap_or("(none)").to_string(),
             "Enter to edit",
         ),
-        FormField::Source => (
-            "Source",
+        FormField::InputCol => (
+            "Input Column",
             "Which text this step operates on.\n\n'working string' is the main address being parsed. Selecting a field makes the step operate on that extracted field instead.",
-            def.source.as_deref().unwrap_or("working string"),
+            def.input_col.as_deref().unwrap_or("working string").to_string(),
             "Enter to pick",
         ),
         FormField::Mode => (
             "Mode",
             "'Whole field' standardizes the entire field value as one lookup.\n\n'Per word' splits on spaces and standardizes each word independently.",
-            def.mode.as_deref().unwrap_or("whole field"),
+            def.mode.as_deref().unwrap_or("whole field").to_string(),
             "Space to toggle",
         ),
         FormField::Label => (
             "Label",
             "Unique identifier for this step. Used in config files for overrides, ordering, and disable lists.",
-            def.label.as_str(),
+            def.label.clone(),
             "Enter to edit",
         ),
-        FormField::Target => (
-            "Target",
-            "The address field where the extracted value is stored.",
-            def.target.as_deref().unwrap_or("(none)"),
-            "Enter to pick",
-        ),
-        FormField::TargetMode => (
-            "Target Mode",
-            "Choose whether this step extracts to a single field or routes capture groups to multiple fields.",
-            if def.targets.is_some() { "Multiple targets" } else { "Single target" },
-            "Space to toggle",
-        ),
+        FormField::OutputCol => {
+            let val = match &def.output_col {
+                Some(OutputCol::Single(s)) => s.clone(),
+                Some(OutputCol::Multi(m)) => {
+                    let mut pairs: Vec<_> = m.iter().collect();
+                    pairs.sort_by_key(|(_, v)| *v);
+                    pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ")
+                }
+                None => "(none)".to_string(),
+            };
+            ("Output Column", "The address field(s) where the extracted value is stored.", val, "Enter to pick")
+        }
         _ => return,
     };
 
@@ -1814,13 +1805,21 @@ fn render_form_help_panel(
     if is_modified {
         if let Some(step_state) = step_state {
             if let Some(default_def) = &step_state.default_def {
-                let default_val = match field {
-                    FormField::Replacement => default_def.replacement.as_deref().unwrap_or("(none)"),
-                    FormField::Source => default_def.source.as_deref().unwrap_or("working string"),
-                    FormField::Target => default_def.target.as_deref().unwrap_or("(none)"),
-                    FormField::SkipIfFilled => if default_def.skip_if_filled == Some(true) { "yes" } else { "no" },
-                    FormField::Mode => default_def.mode.as_deref().unwrap_or("whole field"),
-                    _ => "",
+                let default_val: String = match field {
+                    FormField::Replacement => default_def.replacement.as_deref().unwrap_or("(none)").to_string(),
+                    FormField::InputCol => default_def.input_col.as_deref().unwrap_or("working string").to_string(),
+                    FormField::OutputCol => match &default_def.output_col {
+                        Some(OutputCol::Single(s)) => s.clone(),
+                        Some(OutputCol::Multi(m)) => {
+                            let mut pairs: Vec<_> = m.iter().collect();
+                            pairs.sort_by_key(|(_, v)| *v);
+                            pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ")
+                        }
+                        None => "(none)".to_string(),
+                    },
+                    FormField::SkipIfFilled => (if default_def.skip_if_filled == Some(true) { "yes" } else { "no" }).to_string(),
+                    FormField::Mode => default_def.mode.as_deref().unwrap_or("whole field").to_string(),
+                    _ => String::new(),
                 };
                 if !default_val.is_empty() {
                     lines.push(Line::from(vec![
@@ -1931,13 +1930,17 @@ fn render_form_pattern_panel(frame: &mut Frame, app: &App, area: ratatui::layout
 }
 
 fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    use crate::step::OutputCol;
     let form = app.form_state.as_ref().unwrap();
     let current_form_field = form.visible_fields[form.field_cursor];
-    let focused = form.focus == FormFocus::RightTargets;
+    let focused = form.focus == FormFocus::RightOutputCol;
 
     match current_form_field {
-        FormField::Targets => {
-            let targets = form.def.targets.as_ref();
+        FormField::OutputCol if matches!(&form.def.output_col, Some(OutputCol::Multi(_))) => {
+            let targets = match &form.def.output_col {
+                Some(OutputCol::Multi(m)) => Some(m),
+                _ => None,
+            };
             let mut items = Vec::new();
             for (i, col_def) in COL_DEFS.iter().enumerate() {
                 let is_selected = focused && form.right_cursor == i;
@@ -1969,12 +1972,15 @@ fn render_form_targets_panel(frame: &mut Frame, app: &App, area: ratatui::layout
             );
             frame.render_widget(list, area);
         }
-        FormField::Target | FormField::Source => {
-            let is_source = current_form_field == FormField::Source;
+        FormField::OutputCol | FormField::InputCol => {
+            let is_source = current_form_field == FormField::InputCol;
             let current = if is_source {
-                form.def.source.as_deref()
+                form.def.input_col.as_deref()
             } else {
-                form.def.target.as_deref()
+                match &form.def.output_col {
+                    Some(OutputCol::Single(s)) => Some(s.as_str()),
+                    _ => None,
+                }
             };
             let mut items = Vec::new();
             if is_source {
@@ -2083,7 +2089,7 @@ fn handle_form_key(app: &mut App, code: KeyCode) {
     match form.focus.clone() {
         FormFocus::Left => handle_form_left_key(app, code),
         FormFocus::RightPattern => handle_form_pattern_key(app, code),
-        FormFocus::RightTargets => handle_form_targets_key(app, code),
+        FormFocus::RightOutputCol => handle_form_targets_key(app, code),
         FormFocus::RightTable => handle_form_table_key(app, code),
         FormFocus::EditingText(_, _, _) => handle_form_text_edit(app, code),
     }
@@ -2108,16 +2114,12 @@ fn handle_form_left_key(app: &mut App, code: KeyCode) {
                     form.right_cursor = 0;
                     form.right_alt_selected = None;
                 }
-                FormField::Targets => {
-                    form.focus = FormFocus::RightTargets;
+                FormField::OutputCol | FormField::InputCol => {
+                    form.focus = FormFocus::RightOutputCol;
                     form.right_cursor = 0;
                 }
                 FormField::Table => {
                     form.focus = FormFocus::RightTable;
-                    form.right_cursor = 0;
-                }
-                FormField::Target | FormField::Source => {
-                    form.focus = FormFocus::RightTargets;
                     form.right_cursor = 0;
                 }
                 FormField::Replacement | FormField::Label => {
@@ -2145,22 +2147,6 @@ fn handle_form_left_key(app: &mut App, code: KeyCode) {
                     form.def.mode = if current == Some("per_word") { None } else { Some("per_word".to_string()) };
                     app.dirty = true;
                 }
-                FormField::TargetMode => {
-                    if form.def.targets.is_some() {
-                        let first = form.def.targets.as_ref()
-                            .and_then(|m| m.keys().next().cloned());
-                        form.def.targets = None;
-                        form.def.target = first;
-                    } else {
-                        let mut map = std::collections::HashMap::new();
-                        if let Some(t) = form.def.target.take() {
-                            map.insert(t, 1);
-                        }
-                        form.def.targets = Some(map);
-                    }
-                    form.visible_fields = visible_fields_for_type(&form.def.step_type, &form.def);
-                    app.dirty = true;
-                }
                 _ => {}
             }
         }
@@ -2171,12 +2157,11 @@ fn handle_form_left_key(app: &mut App, code: KeyCode) {
                     let field = form.visible_fields[form.field_cursor];
                     match field {
                         FormField::Pattern => form.def.pattern = default.pattern.clone(),
-                        FormField::Target => form.def.target = default.target.clone(),
-                        FormField::Targets => form.def.targets = default.targets.clone(),
+                        FormField::OutputCol => form.def.output_col = default.output_col.clone(),
                         FormField::Replacement => form.def.replacement = default.replacement.clone(),
                         FormField::SkipIfFilled => form.def.skip_if_filled = default.skip_if_filled,
                         FormField::Table => form.def.table = default.table.clone(),
-                        FormField::Source => form.def.source = default.source.clone(),
+                        FormField::InputCol => form.def.input_col = default.input_col.clone(),
                         FormField::Mode => form.def.mode = default.mode.clone(),
                         _ => {}
                     }
@@ -2221,17 +2206,22 @@ fn close_form(app: &mut App) {
 }
 
 fn validate_step_def(def: &crate::step::StepDef) -> bool {
+    use crate::step::OutputCol;
     match def.step_type.as_str() {
         "extract" => {
             def.pattern.is_some()
-                && (def.target.is_some() || def.targets.as_ref().map(|t| !t.is_empty()).unwrap_or(false))
+                && match &def.output_col {
+                    Some(OutputCol::Single(_)) => true,
+                    Some(OutputCol::Multi(m)) => !m.is_empty(),
+                    None => false,
+                }
         }
         "rewrite" => {
             def.pattern.is_some()
                 && (def.replacement.is_some() || def.table.is_some())
         }
         "standardize" => {
-            def.target.is_some()
+            def.output_col.is_some()
                 && (def.table.is_some() || (def.pattern.is_some() && def.replacement.is_some()))
         }
         _ => false,
@@ -2339,10 +2329,12 @@ fn handle_form_pattern_key(app: &mut App, code: KeyCode) {
 }
 
 fn handle_form_targets_key(app: &mut App, code: KeyCode) {
+    use crate::step::OutputCol;
     let form = app.form_state.as_mut().unwrap();
     let current_field = form.visible_fields[form.field_cursor];
-    let is_source = current_field == FormField::Source;
-    let is_multi = current_field == FormField::Targets;
+    let is_source = current_field == FormField::InputCol;
+    let is_multi = current_field == FormField::OutputCol
+        && matches!(&form.def.output_col, Some(OutputCol::Multi(_)));
     let item_count = if is_source { COL_DEFS.len() + 1 } else { COL_DEFS.len() };
 
     match code {
@@ -2355,13 +2347,13 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
         KeyCode::Enter if !is_multi => {
             let offset = if is_source { 1 } else { 0 };
             if is_source && form.right_cursor == 0 {
-                form.def.source = None;
+                form.def.input_col = None;
             } else {
                 let field_key = COL_DEFS[form.right_cursor - offset].key;
                 if is_source {
-                    form.def.source = Some(field_key.to_string());
+                    form.def.input_col = Some(field_key.to_string());
                 } else {
-                    form.def.target = Some(field_key.to_string());
+                    form.def.output_col = Some(OutputCol::Single(field_key.to_string()));
                 }
             }
             form.focus = FormFocus::Left;
@@ -2369,7 +2361,10 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char(' ') if is_multi => {
             let field_key = COL_DEFS[form.right_cursor].key.to_string();
-            let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
+            let targets = match &mut form.def.output_col {
+                Some(OutputCol::Multi(m)) => m,
+                _ => unreachable!(),
+            };
             if targets.contains_key(&field_key) {
                 targets.remove(&field_key);
             } else {
@@ -2381,13 +2376,16 @@ fn handle_form_targets_key(app: &mut App, code: KeyCode) {
         KeyCode::Char(c) if is_multi && c.is_ascii_digit() && c != '0' => {
             let group = (c as u8 - b'0') as usize;
             let field_key = COL_DEFS[form.right_cursor].key.to_string();
-            let targets = form.def.targets.get_or_insert_with(std::collections::HashMap::new);
+            let targets = match &mut form.def.output_col {
+                Some(OutputCol::Multi(m)) => m,
+                _ => unreachable!(),
+            };
             targets.insert(field_key, group);
             app.dirty = true;
         }
         KeyCode::Char('d') if is_multi => {
             let field_key = COL_DEFS[form.right_cursor].key;
-            if let Some(targets) = &mut form.def.targets {
+            if let Some(OutputCol::Multi(targets)) = &mut form.def.output_col {
                 targets.remove(field_key);
             }
             app.dirty = true;

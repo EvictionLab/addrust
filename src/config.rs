@@ -66,7 +66,7 @@ pub struct StepOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
+    pub output_col: Option<crate::step::OutputCol>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replacement: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,9 +74,7 @@ pub struct StepOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub targets: Option<HashMap<String, usize>>,
+    pub input_col: Option<String>,
 }
 
 impl StepOverride {
@@ -84,12 +82,11 @@ impl StepOverride {
     pub fn apply_to(&self, def: &mut crate::step::StepDef) {
         if let Some(ref p) = self.pattern { def.pattern = Some(p.clone()); }
         if let Some(ref t) = self.table { def.table = Some(t.clone()); }
-        if let Some(ref t) = self.target { def.target = Some(t.clone()); }
+        if let Some(ref o) = self.output_col { def.output_col = Some(o.clone()); }
         if let Some(ref r) = self.replacement { def.replacement = Some(r.clone()); }
         if let Some(s) = self.skip_if_filled { def.skip_if_filled = Some(s); }
         if let Some(ref m) = self.mode { def.mode = Some(m.clone()); }
-        if let Some(ref s) = self.source { def.source = Some(s.clone()); }
-        if let Some(ref t) = self.targets { def.targets = Some(t.clone()); }
+        if let Some(ref s) = self.input_col { def.input_col = Some(s.clone()); }
     }
 }
 
@@ -299,9 +296,7 @@ skip_if_filled = true
         sc.custom_steps = vec![crate::step::StepDef {
             step_type: "rewrite".to_string(),
             label: "test".to_string(),
-            pattern: None, table: None, target: None, replacement: None, source: None,
-            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
-            targets: None,
+            ..Default::default()
         }];
         assert!(!sc.is_empty());
     }
