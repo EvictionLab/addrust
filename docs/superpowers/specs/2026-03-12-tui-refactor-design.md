@@ -105,9 +105,11 @@ pub const STEP_TYPES: &[StepTypeMeta] = &[
     StepTypeMeta {
         name: "extract",
         display: "Extract",
-        visible: &[PropKey::Pattern, PropKey::OutputCol, PropKey::SkipIfFilled,
-                   PropKey::Replacement, PropKey::InputCol, PropKey::Label],
-        required: |def| def.pattern.is_some() && def.output_col.is_some(),
+        visible: &[PropKey::Pattern, PropKey::Table, PropKey::OutputCol,
+                   PropKey::SkipIfFilled, PropKey::Replacement, PropKey::InputCol,
+                   PropKey::Label],
+        required: |def| (def.pattern.is_some() || def.table.is_some())
+            && def.output_col.is_some(),
     },
     StepTypeMeta {
         name: "rewrite",
@@ -256,3 +258,20 @@ Since there is no backward compatibility requirement:
 - Remove `InputMode::EditPattern` remnants if any survive
 - Remove `TABLE_DESCRIPTIONS` constant (derive from table registry or move to `meta.rs`)
 - Remove `ADDRESS_COLS` constant (use `COL_DEFS` from address.rs)
+- Rename `StepOverride` fields to match `StepDef`: `target`/`targets`/`source` → `output_col`/`input_col`, update `apply_to()`
+
+---
+
+## 9. Design Decisions
+
+**OutputCol picker UX:** When the user Enters on the OutputCol property, a column picker shows all columns from `COL_DEFS`. Picking one column stores `OutputCol::Single`. Picking additional columns prompts for capture group numbers and stores `OutputCol::Multi`. No explicit single/multi mode toggle — the data shape drives it.
+
+**Standardize rejects Multi:** `compile_step` returns an error if a standardize step has `OutputCol::Multi`. Standardize operates on one column.
+
+**Multi with one entry is valid:** `compile_step` normalizes `OutputCol::Multi` with a single entry to `OutputCol::Single` behavior internally.
+
+**Enabled toggle stays on the step list:** Space on the steps table toggles enabled/disabled. This is not a form property — it's a list-level action, same as it is today.
+
+**Arrow keys only:** j/k/h/l vim-style navigation is removed. Arrow keys are more discoverable and the TUI is not a text editor.
+
+**New columns (City, State, Zip):** Adding these requires updating `Col` enum, `COL_DEFS`, `Address` struct fields, and the `col()`/`col_mut()` match arms in `Address`. Mechanical additions, no design decisions.
