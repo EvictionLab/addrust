@@ -414,3 +414,611 @@ fn render_step_dropdown_lines(
         _ => {}
     }
 }
+
+/// Handle a key event when the step panel is open.
+pub(crate) fn handle_step_panel_key(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+
+    if panel.show_discard_prompt {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => { app.panel = None; }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => { panel.show_discard_prompt = false; }
+            _ => {}
+        }
+        return;
+    }
+
+    match panel.focus.clone() {
+        PanelFocus::Navigating => handle_step_navigating(app, code),
+        PanelFocus::InlineEdit { .. } => handle_step_inline_edit(app, code),
+        PanelFocus::Dropdown { .. } => handle_step_dropdown(app, code),
+        PanelFocus::DropdownEdit { .. } => handle_step_dropdown_edit(app, code),
+    }
+}
+
+fn handle_step_navigating(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+    let field_count = panel.visible_fields.len();
+
+    match code {
+        KeyCode::Down => {
+            panel.field_cursor = (panel.field_cursor + 1) % field_count;
+        }
+        KeyCode::Up => {
+            panel.field_cursor = if panel.field_cursor == 0 { field_count - 1 } else { panel.field_cursor - 1 };
+        }
+        KeyCode::Left => {
+            let types = meta::STEP_TYPES;
+            let idx = types.iter().position(|t| t.name == panel.def.step_type).unwrap_or(0);
+            let new_idx = if idx == 0 { types.len() - 1 } else { idx - 1 };
+            panel.def.step_type = types[new_idx].name.to_string();
+            panel.visible_fields = visible_fields_for_type(&panel.def.step_type);
+            if panel.field_cursor >= panel.visible_fields.len() {
+                panel.field_cursor = panel.visible_fields.len().saturating_sub(1);
+            }
+        }
+        KeyCode::Right => {
+            let types = meta::STEP_TYPES;
+            let idx = types.iter().position(|t| t.name == panel.def.step_type).unwrap_or(0);
+            let new_idx = (idx + 1) % types.len();
+            panel.def.step_type = types[new_idx].name.to_string();
+            panel.visible_fields = visible_fields_for_type(&panel.def.step_type);
+            if panel.field_cursor >= panel.visible_fields.len() {
+                panel.field_cursor = panel.visible_fields.len().saturating_sub(1);
+            }
+        }
+        KeyCode::Enter => {
+            let field = panel.visible_fields[panel.field_cursor];
+            if is_dropdown_field(field) {
+                panel.focus = PanelFocus::Dropdown { cursor: 0 };
+            } else {
+                let value = match field {
+                    StepField::Label => panel.def.label.clone(),
+                    StepField::Replacement => panel.def.replacement.clone().unwrap_or_default(),
+                    _ => return,
+                };
+                let len = value.len();
+                panel.focus = PanelFocus::InlineEdit { cursor: len, buffer: value };
+            }
+        }
+        KeyCode::Char(' ') => {
+            let field = panel.visible_fields[panel.field_cursor];
+            match field {
+                StepField::SkipIfFilled => {
+                    let current = panel.def.skip_if_filled.unwrap_or(false);
+                    panel.def.skip_if_filled = Some(!current);
+                    app.dirty = true;
+                }
+                StepField::Mode => {
+                    let current = panel.def.mode.as_deref();
+                    panel.def.mode = if current == Some("per_word") { None } else { Some("per_word".to_string()) };
+                    app.dirty = true;
+                }
+                _ => {}
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(step_idx) = panel.step_index {
+                if let Some(default) = &app.steps[step_idx].default_def {
+                    panel.def = default.clone();
+                    panel.visible_fields = visible_fields_for_type(&panel.def.step_type);
+                    panel.pattern_segments = crate::pattern::parse_pattern(
+                        panel.def.pattern.as_deref().unwrap_or(""));
+                    if panel.field_cursor >= panel.visible_fields.len() {
+                        panel.field_cursor = 0;
+                    }
+                    app.dirty = true;
+                }
+            }
+        }
+        KeyCode::Esc => {
+            close_step_panel(app);
+        }
+        _ => {}
+    }
+}
+
+fn handle_step_inline_edit(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+    if let PanelFocus::InlineEdit { cursor, buffer } = &mut panel.focus {
+        match code {
+            KeyCode::Enter => {
+                let value = buffer.clone();
+                let field = panel.visible_fields[panel.field_cursor];
+                match field {
+                    StepField::Label => if !value.is_empty() { panel.def.label = value },
+                    StepField::Replacement => panel.def.replacement = if value.is_empty() { None } else { Some(value) },
+                    _ => {}
+                }
+                panel.focus = PanelFocus::Navigating;
+                app.dirty = true;
+            }
+            KeyCode::Esc => { panel.focus = PanelFocus::Navigating; }
+            KeyCode::Backspace => {
+                if *cursor > 0 { buffer.remove(*cursor - 1); *cursor -= 1; }
+            }
+            KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
+            KeyCode::Right => { if *cursor < buffer.len() { *cursor += 1; } }
+            KeyCode::Char(c) => { buffer.insert(*cursor, c); *cursor += 1; }
+            _ => {}
+        }
+    }
+}
+
+fn handle_step_dropdown(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+    let field = panel.visible_fields[panel.field_cursor];
+    let item_count = dropdown_item_count(panel, field);
+
+    if let PanelFocus::Dropdown { cursor } = &mut panel.focus {
+        match code {
+            KeyCode::Down => { *cursor = (*cursor + 1) % item_count; }
+            KeyCode::Up => { *cursor = if *cursor == 0 { item_count - 1 } else { *cursor - 1 }; }
+            KeyCode::Enter => {
+                match field {
+                    StepField::Pattern => {}
+                    StepField::Table => {
+                        let table_name = TABLE_DESCRIPTIONS[*cursor].0;
+                        panel.def.table = Some(table_name.to_string());
+                        panel.focus = PanelFocus::Navigating;
+                        app.dirty = true;
+                    }
+                    StepField::OutputCol => {
+                        if !matches!(&panel.def.output_col, Some(OutputCol::Multi(_))) {
+                            let fkey = COL_DEFS[*cursor].key;
+                            panel.def.output_col = Some(OutputCol::Single(fkey.to_string()));
+                            panel.focus = PanelFocus::Navigating;
+                            app.dirty = true;
+                        }
+                    }
+                    StepField::InputCol => {
+                        if *cursor == 0 {
+                            panel.def.input_col = None;
+                        } else {
+                            panel.def.input_col = Some(COL_DEFS[*cursor - 1].key.to_string());
+                        }
+                        panel.focus = PanelFocus::Navigating;
+                        app.dirty = true;
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char(' ') => {
+                match field {
+                    StepField::Pattern => {
+                        let selectable: Vec<usize> = panel.pattern_segments.iter().enumerate()
+                            .filter(|(_, s)| matches!(s,
+                                crate::pattern::PatternSegment::AlternationGroup { .. } |
+                                crate::pattern::PatternSegment::TableRef(_)))
+                            .map(|(i, _)| i)
+                            .collect();
+                        if let Some(&seg_idx) = selectable.get(*cursor) {
+                            if let Some(crate::pattern::PatternSegment::AlternationGroup { alternatives, .. }) =
+                                panel.pattern_segments.get_mut(seg_idx)
+                            {
+                                let all_enabled = alternatives.iter().all(|a| a.enabled);
+                                for alt in alternatives.iter_mut() {
+                                    alt.enabled = !all_enabled;
+                                }
+                                panel.def.pattern = Some(crate::pattern::rebuild_pattern(&panel.pattern_segments));
+                                app.dirty = true;
+                            }
+                        }
+                    }
+                    StepField::OutputCol if matches!(&panel.def.output_col, Some(OutputCol::Multi(_))) => {
+                        let fkey = COL_DEFS[*cursor].key.to_string();
+                        if let Some(OutputCol::Multi(m)) = &mut panel.def.output_col {
+                            if m.contains_key(&fkey) { m.remove(&fkey); }
+                            else { let max = m.values().max().copied().unwrap_or(0); m.insert(fkey, max + 1); }
+                        }
+                        app.dirty = true;
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('e') if field == StepField::Pattern => {
+                let text = panel.def.pattern.clone().unwrap_or_default();
+                let len = text.len();
+                panel.focus = PanelFocus::InlineEdit { cursor: len, buffer: text };
+            }
+            KeyCode::Esc => { panel.focus = PanelFocus::Navigating; }
+            _ => {}
+        }
+    }
+}
+
+fn handle_step_dropdown_edit(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+    if let PanelFocus::DropdownEdit { item: _, cursor, buffer } = &mut panel.focus {
+        match code {
+            KeyCode::Enter => {
+                let value = buffer.clone();
+                if !value.is_empty() {
+                    panel.def.pattern = Some(value);
+                    panel.pattern_segments = crate::pattern::parse_pattern(
+                        panel.def.pattern.as_deref().unwrap_or(""));
+                }
+                panel.focus = PanelFocus::Dropdown { cursor: 0 };
+                app.dirty = true;
+            }
+            KeyCode::Esc => { panel.focus = PanelFocus::Dropdown { cursor: 0 }; }
+            KeyCode::Backspace => { if *cursor > 0 { buffer.remove(*cursor - 1); *cursor -= 1; } }
+            KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
+            KeyCode::Right => { if *cursor < buffer.len() { *cursor += 1; } }
+            KeyCode::Char(c) => { buffer.insert(*cursor, c); *cursor += 1; }
+            _ => {}
+        }
+    }
+}
+
+fn dropdown_item_count(panel: &StepPanelState, field: StepField) -> usize {
+    match field {
+        StepField::Pattern => panel.pattern_segments.iter()
+            .filter(|s| matches!(s,
+                crate::pattern::PatternSegment::AlternationGroup { .. } |
+                crate::pattern::PatternSegment::TableRef(_)))
+            .count().max(1),
+        StepField::Table => TABLE_DESCRIPTIONS.len(),
+        StepField::OutputCol => COL_DEFS.len(),
+        StepField::InputCol => COL_DEFS.len() + 1,
+        _ => 0,
+    }
+}
+
+fn close_step_panel(app: &mut App) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Step(s)) => s,
+        _ => return,
+    };
+
+    if panel.is_new {
+        let valid = validate_step_def(&panel.def);
+        if valid {
+            let def = panel.def.clone();
+            let insert_idx = app.steps_list_state.selected().map(|i| i + 1).unwrap_or(app.steps.len());
+            app.steps.insert(insert_idx, super::tabs::StepState {
+                enabled: true,
+                default_enabled: true,
+                is_custom: true,
+                def,
+                default_def: None,
+            });
+            app.dirty = true;
+            app.panel = None;
+        } else {
+            panel.show_discard_prompt = true;
+        }
+    } else {
+        if let Some(idx) = panel.step_index {
+            app.steps[idx].def = panel.def.clone();
+            app.dirty = true;
+        }
+        app.panel = None;
+    }
+}
+
+fn validate_step_def(def: &StepDef) -> bool {
+    !def.label.is_empty() && (def.pattern.is_some() || def.table.is_some())
+}
+
+/// Get step type from a StepDef. Falls back to "extract" if empty.
+pub(crate) fn get_step_type(def: &StepDef) -> String {
+    if def.step_type.is_empty() {
+        "extract".to_string()
+    } else {
+        def.step_type.clone()
+    }
+}
+
+/// Render the dictionary entry panel overlay.
+pub(crate) fn render_dict_panel(frame: &mut Frame, app: &mut App, area: Rect) {
+    let panel = match &app.panel {
+        Some(PanelKind::Dict(d)) => d,
+        _ => return,
+    };
+
+    let dropdown_lines = if panel.field_cursor == 2 {
+        match &panel.focus {
+            PanelFocus::Dropdown { .. } | PanelFocus::DropdownEdit { .. } =>
+                panel.variants.len().max(1) as u16,
+            _ => 0,
+        }
+    } else { 0 };
+    let content_lines = 3 + dropdown_lines;
+    let overlay = centered_overlay(area, content_lines);
+    frame.render_widget(Clear, overlay);
+
+    let [header_area, body_area, footer_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Fill(1),
+        Constraint::Length(2),
+    ]).areas(overlay);
+
+    let title = if panel.is_new { "New Entry" } else { "Edit Entry" };
+    let header = Paragraph::new(Line::from(
+        Span::styled(format!(" {}", panel.short), Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ))
+    .block(Block::bordered().title(title));
+    frame.render_widget(header, header_area);
+
+    render_dict_body(frame, panel, body_area);
+
+    let hints = match &panel.focus {
+        PanelFocus::Navigating => "Enter: edit  Esc: close",
+        PanelFocus::InlineEdit { .. } => "Enter: confirm  Esc: cancel",
+        PanelFocus::Dropdown { .. } => "Space: toggle  a: add  d: delete  Esc: collapse",
+        PanelFocus::DropdownEdit { .. } => "Enter: confirm  Esc: cancel",
+    };
+    let footer = Paragraph::new(Line::from(Span::styled(
+        format!(" {}", hints), Style::new().fg(Color::DarkGray),
+    )))
+    .block(Block::new().borders(ratatui::widgets::Borders::TOP).border_style(Style::new().fg(Color::DarkGray)));
+    frame.render_widget(footer, footer_area);
+}
+
+fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    let fields = ["Short form", "Long form", "Variants"];
+
+    for (i, &label) in fields.iter().enumerate() {
+        let is_selected = panel.focus == PanelFocus::Navigating && panel.field_cursor == i;
+
+        if i == panel.field_cursor {
+            if let PanelFocus::InlineEdit { cursor, ref buffer } = panel.focus {
+                let cursor_line = widgets::cursor_line(buffer, cursor);
+                let mut spans = vec![
+                    Span::styled(format!("  {:16}", label), Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+                ];
+                spans.extend(cursor_line.spans);
+                lines.push(Line::from(spans));
+                continue;
+            }
+        }
+
+        let value = match i {
+            0 => panel.short.clone(),
+            1 => panel.long.clone(),
+            2 => format!("{} variants", panel.variants.len()),
+            _ => String::new(),
+        };
+
+        let style = if is_selected {
+            Style::new().fg(Color::White).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(Color::DarkGray)
+        };
+
+        let label_str = format!("  {:16}", label);
+        let avail = area.width.saturating_sub(label_str.len() as u16 + 2) as usize;
+        let value_padded = format!("{:>width$}  ", value, width = avail);
+        lines.push(Line::from(vec![
+            Span::styled(label_str, style),
+            Span::styled(value_padded, style),
+        ]));
+
+        if i == 2 {
+            if let PanelFocus::Dropdown { cursor } | PanelFocus::DropdownEdit { item: cursor, .. } = &panel.focus {
+                if panel.field_cursor == 2 {
+                    for (vi, (text, enabled)) in panel.variants.iter().enumerate() {
+                        let is_sel = vi == *cursor;
+                        let check = widgets::checkbox(*enabled);
+
+                        if let PanelFocus::DropdownEdit { item, cursor: c, buffer } = &panel.focus {
+                            if vi == *item {
+                                let cursor_line = widgets::cursor_line(buffer, *c);
+                                let mut spans = vec![
+                                    Span::styled(format!("    {} ", check), Style::new().fg(Color::Cyan)),
+                                ];
+                                spans.extend(cursor_line.spans);
+                                lines.push(Line::from(spans));
+                                continue;
+                            }
+                        }
+
+                        let display = if *enabled {
+                            Span::styled(text.clone(), if is_sel {
+                                Style::new().fg(Color::White).bg(Color::DarkGray)
+                            } else {
+                                Style::new().fg(Color::DarkGray)
+                            })
+                        } else {
+                            Span::styled(text.clone(), Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM))
+                        };
+                        let label = format!("    {} ", check);
+                        lines.push(Line::from(vec![
+                            Span::styled(label, if is_sel {
+                                Style::new().fg(Color::Cyan).bg(Color::DarkGray)
+                            } else {
+                                Style::new().fg(Color::Cyan)
+                            }),
+                            display,
+                        ]));
+                    }
+                }
+            }
+        }
+    }
+
+    let body = Paragraph::new(lines)
+        .block(Block::bordered().border_style(Style::new().fg(Color::DarkGray)));
+    frame.render_widget(body, area);
+}
+
+/// Handle a key event when the dict panel is open.
+pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
+    let panel = match &mut app.panel {
+        Some(PanelKind::Dict(d)) => d,
+        _ => return,
+    };
+
+    match panel.focus.clone() {
+        PanelFocus::Navigating => {
+            match code {
+                KeyCode::Down => { panel.field_cursor = (panel.field_cursor + 1) % 3; }
+                KeyCode::Up => { panel.field_cursor = if panel.field_cursor == 0 { 2 } else { panel.field_cursor - 1 }; }
+                KeyCode::Enter => {
+                    match panel.field_cursor {
+                        0 => {
+                            let len = panel.short.len();
+                            panel.focus = PanelFocus::InlineEdit { cursor: len, buffer: panel.short.clone() };
+                        }
+                        1 => {
+                            let len = panel.long.len();
+                            panel.focus = PanelFocus::InlineEdit { cursor: len, buffer: panel.long.clone() };
+                        }
+                        2 => {
+                            panel.focus = PanelFocus::Dropdown { cursor: 0 };
+                        }
+                        _ => {}
+                    }
+                }
+                KeyCode::Esc => {
+                    close_dict_panel(app);
+                }
+                _ => {}
+            }
+        }
+        PanelFocus::InlineEdit { .. } => {
+            if let Some(PanelKind::Dict(panel)) = &mut app.panel {
+                if let PanelFocus::InlineEdit { cursor, buffer } = &mut panel.focus {
+                    match code {
+                        KeyCode::Enter => {
+                            let value = buffer.clone();
+                            match panel.field_cursor {
+                                0 => panel.short = value.to_uppercase(),
+                                1 => panel.long = value.to_uppercase(),
+                                _ => {}
+                            }
+                            panel.focus = PanelFocus::Navigating;
+                            app.dirty = true;
+                        }
+                        KeyCode::Esc => { panel.focus = PanelFocus::Navigating; }
+                        KeyCode::Backspace => { if *cursor > 0 { buffer.remove(*cursor - 1); *cursor -= 1; } }
+                        KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
+                        KeyCode::Right => { if *cursor < buffer.len() { *cursor += 1; } }
+                        KeyCode::Char(c) => { buffer.insert(*cursor, c); *cursor += 1; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        PanelFocus::Dropdown { .. } => {
+            if let Some(PanelKind::Dict(panel)) = &mut app.panel {
+                if let PanelFocus::Dropdown { cursor } = &mut panel.focus {
+                    let count = panel.variants.len().max(1);
+                    match code {
+                        KeyCode::Down => { *cursor = (*cursor + 1) % count; }
+                        KeyCode::Up => { *cursor = if *cursor == 0 { count - 1 } else { *cursor - 1 }; }
+                        KeyCode::Char(' ') => {
+                            if *cursor < panel.variants.len() {
+                                panel.variants[*cursor].1 = !panel.variants[*cursor].1;
+                                app.dirty = true;
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if *cursor < panel.variants.len() {
+                                let text = panel.variants[*cursor].0.clone();
+                                let len = text.len();
+                                panel.focus = PanelFocus::DropdownEdit {
+                                    item: *cursor, cursor: len, buffer: text,
+                                };
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            panel.focus = PanelFocus::DropdownEdit {
+                                item: panel.variants.len(), cursor: 0, buffer: String::new(),
+                            };
+                        }
+                        KeyCode::Char('d') => {
+                            if *cursor < panel.variants.len() {
+                                panel.variants.remove(*cursor);
+                                if *cursor >= panel.variants.len() && !panel.variants.is_empty() {
+                                    *cursor = panel.variants.len() - 1;
+                                }
+                                app.dirty = true;
+                            }
+                        }
+                        KeyCode::Esc => { panel.focus = PanelFocus::Navigating; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        PanelFocus::DropdownEdit { .. } => {
+            if let Some(PanelKind::Dict(panel)) = &mut app.panel {
+                if let PanelFocus::DropdownEdit { item, cursor, buffer } = &mut panel.focus {
+                    match code {
+                        KeyCode::Enter => {
+                            let value = buffer.clone().to_uppercase();
+                            if !value.is_empty() {
+                                if *item >= panel.variants.len() {
+                                    panel.variants.push((value, true));
+                                } else {
+                                    panel.variants[*item].0 = value;
+                                }
+                                app.dirty = true;
+                            }
+                            panel.focus = PanelFocus::Dropdown { cursor: panel.variants.len().saturating_sub(1) };
+                        }
+                        KeyCode::Esc => {
+                            panel.focus = PanelFocus::Dropdown { cursor: (*item).min(panel.variants.len().saturating_sub(1)) };
+                        }
+                        KeyCode::Backspace => { if *cursor > 0 { buffer.remove(*cursor - 1); *cursor -= 1; } }
+                        KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
+                        KeyCode::Right => { if *cursor < buffer.len() { *cursor += 1; } }
+                        KeyCode::Char(c) => { buffer.insert(*cursor, c); *cursor += 1; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn close_dict_panel(app: &mut App) {
+    // Clone fields out of panel to avoid borrow conflict with app mutation
+    let (entry_index, short, long, variants) = match &app.panel {
+        Some(PanelKind::Dict(d)) => (
+            d.entry_index,
+            d.short.clone(),
+            d.long.clone(),
+            d.variants.iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(text, _)| text.clone())
+                .collect::<Vec<_>>(),
+        ),
+        _ => return,
+    };
+
+    let entry = &mut app.current_dict_entries_mut()[entry_index];
+    entry.short = short;
+    entry.long = long;
+    entry.variants = variants;
+
+    if entry.status == super::tabs::GroupStatus::Default {
+        if entry.short != entry.original_short
+            || entry.long != entry.original_long
+            || entry.variants != entry.original_variants
+        {
+            entry.status = super::tabs::GroupStatus::Modified;
+        }
+    }
+
+    app.dirty = true;
+    app.panel = None;
+}
