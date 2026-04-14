@@ -28,10 +28,6 @@ fn main() {
         let variant = cols[1].trim().to_uppercase();
         let usps = cols[2].trim().to_uppercase();
 
-        if usps == "TRAILER" || usps == "HIGHWAY" {
-            continue;
-        }
-
         let canonical_short =
             if ["PARK", "WALK", "SPUR", "LOOP"].contains(&usps.as_str())
                 && ["PARKS", "WALKS", "SPURS", "LOOPS"].contains(&primary.as_str())
