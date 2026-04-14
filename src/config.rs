@@ -39,9 +39,47 @@ impl Default for OutputConfig {
     }
 }
 
+/// Static metadata for each output component.
+pub struct OutputFieldMeta {
+    pub key: &'static str,
+    pub default: OutputFormat,
+    pub example_short: &'static str,
+    pub example_long: &'static str,
+}
+
+pub const OUTPUT_FIELDS: &[OutputFieldMeta] = &[
+    OutputFieldMeta { key: "suffix", default: OutputFormat::Long, example_short: "DR", example_long: "DRIVE" },
+    OutputFieldMeta { key: "direction", default: OutputFormat::Short, example_short: "N", example_long: "NORTH" },
+    OutputFieldMeta { key: "unit_type", default: OutputFormat::Long, example_short: "APT", example_long: "APARTMENT" },
+    OutputFieldMeta { key: "unit_location", default: OutputFormat::Long, example_short: "UPPR", example_long: "UPPER" },
+    OutputFieldMeta { key: "state", default: OutputFormat::Short, example_short: "NY", example_long: "NEW YORK" },
+];
+
 impl OutputConfig {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    pub fn get(&self, key: &str) -> OutputFormat {
+        match key {
+            "suffix" => self.suffix,
+            "direction" => self.direction,
+            "unit_type" => self.unit_type,
+            "unit_location" => self.unit_location,
+            "state" => self.state,
+            _ => OutputFormat::Long,
+        }
+    }
+
+    pub fn set(&mut self, key: &str, format: OutputFormat) {
+        match key {
+            "suffix" => self.suffix = format,
+            "direction" => self.direction = format,
+            "unit_type" => self.unit_type = format,
+            "unit_location" => self.unit_location = format,
+            "state" => self.state = format,
+            _ => {}
+        }
     }
 
     pub fn format_for_field(&self, col: crate::address::Col) -> OutputFormat {
@@ -50,6 +88,8 @@ impl OutputConfig {
             Col::Suffix => self.suffix,
             Col::PreDirection | Col::PostDirection => self.direction,
             Col::Unit => self.unit_location,
+            Col::UnitType => self.unit_type,
+            Col::State => self.state,
             _ => OutputFormat::Long,
         }
     }
@@ -61,6 +101,8 @@ fn is_short(f: &OutputFormat) -> bool { *f == OutputFormat::Short }
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct StepOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,6 +122,7 @@ pub struct StepOverride {
 impl StepOverride {
     /// Apply this override to a StepDef, replacing only the fields that are Some.
     pub fn apply_to(&self, def: &mut crate::step::StepDef) {
+        if let Some(ref l) = self.label { def.label = l.clone(); }
         if let Some(ref p) = self.pattern { def.pattern = Some(p.clone()); }
         if let Some(ref t) = self.table { def.table = Some(t.clone()); }
         if let Some(ref o) = self.output_col { def.output_col = Some(o.clone()); }

@@ -14,30 +14,10 @@ use super::App;
 // Types
 // ---------------------------------------------------------------------------
 
-/// Input mode for dictionary and pattern editing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InputMode {
-    Normal,
-    /// Adding a new entry: typing the short form (text, cursor).
-    AddShort(String, usize),
-    /// Adding a new entry: short form done, typing the long form (short, long, cursor).
-    AddLong(String, String, usize),
-    /// Editing an existing entry's long form: (index, text, cursor).
-    EditLong(usize, String, usize),
-    /// Viewing/editing a group's variants: (group_index, variant_cursor).
-    EditVariants(usize, usize),
-    /// Adding a new variant to a group: (group_index, text, cursor).
-    AddVariant(usize, String, usize),
-}
-
-/// A per-component output format setting.
+/// Per-component output format (indexes into config::OUTPUT_FIELDS).
 #[derive(Debug, Clone)]
 pub(crate) struct OutputSettingState {
-    pub(crate) component: String,
     pub(crate) format: crate::config::OutputFormat,
-    pub(crate) default_format: crate::config::OutputFormat,
-    pub(crate) example_short: String,
-    pub(crate) example_long: String,
 }
 
 /// A dictionary group with its change status.
@@ -65,7 +45,6 @@ pub(crate) enum GroupStatus {
 #[derive(Debug, Clone)]
 pub(crate) struct StepState {
     pub(crate) enabled: bool,
-    pub(crate) default_enabled: bool,
     pub(crate) is_custom: bool,
     pub(crate) def: crate::step::StepDef,
     pub(crate) default_def: Option<crate::step::StepDef>,
@@ -77,87 +56,9 @@ impl StepState {
     pub(crate) fn is_modified(&self) -> bool {
         match &self.default_def {
             None => false,
-            Some(default) => self.def != *default || self.enabled != self.default_enabled,
+            Some(default) => self.def != *default || !self.enabled,
         }
     }
-}
-
-/// Result of a text editing keystroke.
-pub(crate) enum TextEditResult {
-    /// Text was modified or cursor moved — continue editing.
-    Continue,
-    /// Enter was pressed — return the final text.
-    Submit(String),
-    /// Esc was pressed — cancel.
-    Cancel,
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Handle a keystroke for cursor-aware text editing.
-/// Returns the action to take. Mutates text and cursor in place for Continue.
-pub(crate) fn text_edit(text: &mut String, cursor: &mut usize, code: KeyCode) -> TextEditResult {
-    match code {
-        KeyCode::Enter => TextEditResult::Submit(text.clone()),
-        KeyCode::Esc => TextEditResult::Cancel,
-        KeyCode::Left => {
-            if *cursor > 0 { *cursor -= 1; }
-            TextEditResult::Continue
-        }
-        KeyCode::Right => {
-            if *cursor < text.len() { *cursor += 1; }
-            TextEditResult::Continue
-        }
-        KeyCode::Home => {
-            *cursor = 0;
-            TextEditResult::Continue
-        }
-        KeyCode::End => {
-            *cursor = text.len();
-            TextEditResult::Continue
-        }
-        KeyCode::Char(c) => {
-            text.insert(*cursor, c);
-            *cursor += 1;
-            TextEditResult::Continue
-        }
-        KeyCode::Backspace => {
-            if *cursor > 0 {
-                *cursor -= 1;
-                text.remove(*cursor);
-            }
-            TextEditResult::Continue
-        }
-        KeyCode::Delete => {
-            if *cursor < text.len() {
-                text.remove(*cursor);
-            }
-            TextEditResult::Continue
-        }
-        _ => TextEditResult::Continue,
-    }
-}
-
-/// Render text with a cursor indicator at the given position.
-pub(crate) fn render_text_with_cursor(text: &str, cursor: usize) -> String {
-    let mut display = String::with_capacity(text.len() + 1);
-    for (i, c) in text.chars().enumerate() {
-        if i == cursor {
-            // Use combining underline to show cursor position
-            display.push('|');
-        }
-        display.push(c);
-    }
-    if cursor >= text.len() {
-        display.push('_');
-    }
-    display
 }
 
 // ---------------------------------------------------------------------------
@@ -359,9 +260,17 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        // Add new entry
+        // Add new entry via panel
         KeyCode::Char('a') => {
-            app.input_mode = InputMode::AddShort(String::new(), 0);
+            app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
+                entry_index: app.current_dict_entries().len(),
+                short: String::new(),
+                long: String::new(),
+                variants: vec![],
+                field_cursor: 0,
+                focus: super::panel::PanelFocus::InlineEdit { cursor: 0, buffer: String::new() },
+                is_new: true,
+            }));
         }
         // Toggle removal (like steps tab Space toggle)
         KeyCode::Char(' ') => {
@@ -416,13 +325,24 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                 }));
             }
         }
-        // Edit long form directly
+        // Edit entry via panel, focused on long form
         KeyCode::Char('e') => {
             if let Some(i) = app.dict_list_state.selected() {
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
+                    let variants: Vec<(String, bool)> = entry.variants.iter()
+                        .map(|v| (v.clone(), true))
+                        .collect();
                     let cursor = entry.long.len();
-                    app.input_mode = InputMode::EditLong(i, entry.long.clone(), cursor);
+                    app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
+                        entry_index: i,
+                        short: entry.short.clone(),
+                        long: entry.long.clone(),
+                        variants,
+                        field_cursor: 1,
+                        focus: super::panel::PanelFocus::InlineEdit { cursor, buffer: entry.long.clone() },
+                        is_new: false,
+                    }));
                 }
             }
         }
@@ -430,156 +350,6 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
     }
 }
 
-pub(crate) fn handle_input_mode(app: &mut App, code: KeyCode) {
-    match &mut app.input_mode {
-        InputMode::AddShort(short, cursor) => {
-            match text_edit(short, cursor, code) {
-                TextEditResult::Submit(s) if !s.is_empty() => {
-                    let s = s.to_uppercase();
-                    let is_vl = {
-                        let tables = build_default_tables();
-                        tables
-                            .get(&app.table_names[app.dict_tab_index])
-                            .map(|t| t.is_value_list())
-                            .unwrap_or(false)
-                    };
-                    if is_vl {
-                        let new_entry = DictGroupState {
-                            short: s.clone(),
-                            long: String::new(),
-                            variants: Vec::new(),
-                            status: GroupStatus::Added,
-                            original_short: s,
-                            original_long: String::new(),
-                            original_variants: Vec::new(),
-                        };
-                        app.current_dict_entries_mut().push(new_entry);
-                        let len = app.current_dict_entries().len();
-                        app.dict_list_state.select(Some(len - 1));
-                        app.dirty = true;
-                        app.input_mode = InputMode::Normal;
-                    } else {
-                        app.input_mode = InputMode::AddLong(s, String::new(), 0);
-                    }
-                }
-                TextEditResult::Submit(_) => {} // empty — ignore
-                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
-                TextEditResult::Continue => {}
-            }
-        }
-        InputMode::AddLong(short, long, cursor) => {
-            let short_snapshot = short.clone();
-            match text_edit(long, cursor, code) {
-                TextEditResult::Submit(l) => {
-                    if !l.is_empty() {
-                        let s = short_snapshot.to_uppercase();
-                        let l = l.to_uppercase();
-                        let new_entry = DictGroupState {
-                            short: s.clone(),
-                            long: l.clone(),
-                            variants: Vec::new(),
-                            status: GroupStatus::Added,
-                            original_short: s,
-                            original_long: l,
-                            original_variants: Vec::new(),
-                        };
-                        app.current_dict_entries_mut().push(new_entry);
-                        let len = app.current_dict_entries().len();
-                        app.dict_list_state.select(Some(len - 1));
-                        app.dirty = true;
-                    }
-                    app.input_mode = InputMode::Normal;
-                }
-                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
-                TextEditResult::Continue => {}
-            }
-        }
-        InputMode::EditLong(idx, text, cursor) => {
-            let idx_val = *idx;
-            match text_edit(text, cursor, code) {
-                TextEditResult::Submit(new_long) => {
-                    let new_long = new_long.to_uppercase();
-                    let entry = &mut app.current_dict_entries_mut()[idx_val];
-                    if entry.status == GroupStatus::Default {
-                        entry.status = GroupStatus::Modified;
-                    }
-                    entry.long = new_long;
-                    app.dirty = true;
-                    app.input_mode = InputMode::Normal;
-                }
-                TextEditResult::Cancel => { app.input_mode = InputMode::Normal; }
-                TextEditResult::Continue => {}
-            }
-        }
-        InputMode::EditVariants(group_idx, cursor) => {
-            let group_idx = *group_idx;
-            let cursor = *cursor;
-            match code {
-                KeyCode::Esc => {
-                    app.input_mode = InputMode::Normal;
-                }
-                KeyCode::Down => {
-                    let len = app.current_dict_entries()[group_idx].variants.len();
-                    if len > 0 {
-                        app.input_mode = InputMode::EditVariants(group_idx, (cursor + 1) % len);
-                    }
-                }
-                KeyCode::Up => {
-                    let len = app.current_dict_entries()[group_idx].variants.len();
-                    if len > 0 {
-                        app.input_mode = InputMode::EditVariants(
-                            group_idx,
-                            if cursor == 0 { len - 1 } else { cursor - 1 },
-                        );
-                    }
-                }
-                KeyCode::Char('a') => {
-                    app.input_mode = InputMode::AddVariant(group_idx, String::new(), 0);
-                }
-                KeyCode::Char('d') | KeyCode::Delete => {
-                    let entry = &mut app.current_dict_entries_mut()[group_idx];
-                    if !entry.variants.is_empty() {
-                        entry.variants.remove(cursor);
-                        if entry.status == GroupStatus::Default {
-                            entry.status = GroupStatus::Modified;
-                        }
-                        app.dirty = true;
-                        let new_len = app.current_dict_entries()[group_idx].variants.len();
-                        let new_cursor = if new_len == 0 { 0 } else { cursor.min(new_len - 1) };
-                        app.input_mode = InputMode::EditVariants(group_idx, new_cursor);
-                    }
-                }
-                _ => {}
-            }
-        }
-        InputMode::AddVariant(group_idx, text, cursor) => {
-            let gidx = *group_idx;
-            let back_to_variants = |app: &mut App, gidx: usize| {
-                let len = app.current_dict_entries()[gidx].variants.len();
-                app.input_mode = InputMode::EditVariants(gidx, if len > 0 { len - 1 } else { 0 });
-            };
-            match text_edit(text, cursor, code) {
-                TextEditResult::Submit(v) => {
-                    if !v.is_empty() {
-                        let v = v.to_uppercase();
-                        let entry = &mut app.current_dict_entries_mut()[gidx];
-                        if !entry.variants.contains(&v) {
-                            entry.variants.push(v);
-                            if entry.status == GroupStatus::Default {
-                                entry.status = GroupStatus::Modified;
-                            }
-                            app.dirty = true;
-                        }
-                    }
-                    back_to_variants(app, gidx);
-                }
-                TextEditResult::Cancel => { back_to_variants(app, gidx); }
-                TextEditResult::Continue => {}
-            }
-        }
-        InputMode::Normal => unreachable!(),
-    }
-}
 
 pub(crate) fn handle_output_key(app: &mut App, code: KeyCode) {
     use crate::config::OutputFormat;
@@ -628,8 +398,6 @@ pub(crate) fn render_steps(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else if !r.enabled {
                 Style::new().fg(Color::DarkGray)
-            } else if r.enabled != r.default_enabled {
-                Style::new().fg(Color::Yellow)
             } else {
                 Style::new()
             };
@@ -872,21 +640,22 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 pub(crate) fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
-    use crate::config::OutputFormat;
+    use crate::config::{OutputFormat, OUTPUT_FIELDS};
 
-    // Build table rows
     let rows: Vec<Row> = app
         .output_settings
         .iter()
-        .map(|s| {
-            let is_modified = s.format != s.default_format;
+        .enumerate()
+        .map(|(i, s)| {
+            let meta = &OUTPUT_FIELDS[i];
+            let is_modified = s.format != meta.default;
             let format_str = match s.format {
                 OutputFormat::Short => "Short",
                 OutputFormat::Long => "Long",
             };
             let example = match s.format {
-                OutputFormat::Short => &s.example_short,
-                OutputFormat::Long => &s.example_long,
+                OutputFormat::Short => meta.example_short,
+                OutputFormat::Long => meta.example_long,
             };
             let style = if is_modified {
                 Style::new().fg(Color::Yellow)
@@ -894,9 +663,9 @@ pub(crate) fn render_output(frame: &mut Frame, app: &mut App, area: Rect) {
                 Style::new()
             };
             Row::new(vec![
-                Cell::from(s.component.clone()),
+                Cell::from(meta.key),
                 Cell::from(format_str),
-                Cell::from(example.clone()),
+                Cell::from(example),
             ]).style(style)
         })
         .collect();

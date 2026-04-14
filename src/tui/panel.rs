@@ -90,6 +90,40 @@ mod types {
     }
 }
 
+const DICT_FIELD_COUNT: u16 = 3; // Short form, Long form, Variants
+
+impl PanelKind {
+    /// Number of content lines for the panel body (fields + dropdown + border + spacing).
+    fn content_lines(&self) -> u16 {
+        match self {
+            PanelKind::Step(panel) => {
+                let dropdown = match &panel.focus {
+                    PanelFocus::Dropdown { .. } | PanelFocus::DropdownEdit { .. } =>
+                        dropdown_content_height(panel) as u16,
+                    _ => 0,
+                };
+                // type selector (1) + blank line (1) + fields + dropdown + body border (2)
+                2 + panel.visible_fields.len() as u16 + dropdown + 2
+            }
+            PanelKind::Dict(panel) => {
+                let dropdown = if panel.field_cursor == 2 {
+                    match &panel.focus {
+                        PanelFocus::Dropdown { .. } => panel.variants.len().max(1) as u16,
+                        PanelFocus::DropdownEdit { item, .. } => {
+                            // +1 line if adding a new variant beyond existing
+                            let extra = if *item >= panel.variants.len() { 1 } else { 0 };
+                            (panel.variants.len() as u16 + extra).max(1)
+                        }
+                        _ => 0,
+                    }
+                } else { 0 };
+                // fields + dropdown + body border (2) + blank line (1)
+                DICT_FIELD_COUNT + dropdown + 2 + 1
+            }
+        }
+    }
+}
+
 /// Compute a centered overlay rect with auto-height.
 /// Width is 70% of area, height is `content_lines` + 5 (header 3 + footer 2),
 /// clamped to area height - 4.
@@ -101,18 +135,28 @@ pub(crate) fn centered_overlay(area: Rect, content_lines: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-/// All fields visible on every step type.
-pub(crate) fn visible_fields_for_type(_step_type: &str) -> Vec<StepField> {
-    vec![
-        StepField::Label,
-        StepField::Pattern,
-        StepField::Table,
-        StepField::OutputCol,
-        StepField::InputCol,
-        StepField::Replacement,
-        StepField::SkipIfFilled,
-        StepField::Mode,
-    ]
+/// Fields visible per step type.
+pub(crate) fn visible_fields_for_type(step_type: &str) -> Vec<StepField> {
+    match step_type {
+        "extract" => vec![
+            StepField::Label,
+            StepField::InputCol,
+            StepField::Pattern,
+            StepField::Table,
+            StepField::OutputCol,
+            StepField::Replacement,
+            StepField::SkipIfFilled,
+        ],
+        _ => vec![
+            // "rewrite" (including former "standardize")
+            StepField::Label,
+            StepField::InputCol,
+            StepField::Pattern,
+            StepField::Table,
+            StepField::Replacement,
+            StepField::Mode,
+        ],
+    }
 }
 
 /// Get display label and current value for a step field.
@@ -124,7 +168,11 @@ fn step_field_display(field: StepField, def: &StepDef) -> (&'static str, String)
         StepField::Table => ("Table", def.table.as_deref().unwrap_or("(none)").to_string()),
         StepField::OutputCol => ("Output", match &def.output_col {
             Some(OutputCol::Single(s)) => s.clone(),
-            Some(OutputCol::Multi(m)) => format!("multi ({})", m.len()),
+            Some(OutputCol::Multi(m)) => {
+                let mut pairs: Vec<_> = m.iter().collect();
+                pairs.sort_by_key(|(_, v)| *v);
+                pairs.iter().map(|(k, v)| format!("{}=${}", k, v)).collect::<Vec<_>>().join(", ")
+            }
             None => "(none)".to_string(),
         }),
         StepField::SkipIfFilled => ("Skip if filled",
@@ -153,15 +201,7 @@ pub(crate) fn render_step_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let step_state = panel.step_index.map(|i| &app.steps[i]);
 
-    let dropdown_lines = match &panel.focus {
-        PanelFocus::Dropdown { .. } | PanelFocus::DropdownEdit { .. } => {
-            dropdown_content_height(panel) as u16
-        }
-        _ => 0,
-    };
-    // type selector (1) + blank line (1) + fields + dropdown + body border (2)
-    let content_lines = 2 + panel.visible_fields.len() as u16 + dropdown_lines + 2;
-    let overlay = centered_overlay(area, content_lines);
+    let overlay = centered_overlay(area, app.panel.as_ref().unwrap().content_lines());
     frame.render_widget(Clear, overlay);
 
     let [header_area, body_area, footer_area] = Layout::vertical([
@@ -262,9 +302,11 @@ fn render_step_body(frame: &mut Frame, app: &App, area: Rect) {
 
         if i == panel.field_cursor {
             if let PanelFocus::InlineEdit { cursor, ref buffer } = panel.focus {
-                let cursor_line = widgets::cursor_line(buffer, cursor);
+                let prefix = format!("  {:16}", label);
+                let avail = area.width.saturating_sub(prefix.len() as u16 + 2) as usize;
+                let cursor_line = widgets::cursor_line(buffer, cursor, avail);
                 let mut spans = vec![
-                    Span::styled(format!("  {:16}", label), Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(prefix, Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
                 ];
                 spans.extend(cursor_line.spans);
                 lines.push(Line::from(spans));
@@ -571,7 +613,10 @@ fn handle_step_dropdown(app: &mut App, code: KeyCode) {
                         app.dirty = true;
                     }
                     StepField::OutputCol => {
-                        if !matches!(&panel.def.output_col, Some(OutputCol::Multi(_))) {
+                        if matches!(&panel.def.output_col, Some(OutputCol::Multi(_))) {
+                            // In multi mode, Enter closes the dropdown
+                            panel.focus = PanelFocus::Navigating;
+                        } else {
                             let fkey = COL_DEFS[*cursor].key;
                             panel.def.output_col = Some(OutputCol::Single(fkey.to_string()));
                             panel.focus = PanelFocus::Navigating;
@@ -612,16 +657,41 @@ fn handle_step_dropdown(app: &mut App, code: KeyCode) {
                             }
                         }
                     }
-                    StepField::OutputCol if matches!(&panel.def.output_col, Some(OutputCol::Multi(_))) => {
+                    StepField::OutputCol => {
                         let fkey = COL_DEFS[*cursor].key.to_string();
-                        if let Some(OutputCol::Multi(m)) = &mut panel.def.output_col {
-                            if m.contains_key(&fkey) { m.remove(&fkey); }
-                            else { let max = m.values().max().copied().unwrap_or(0); m.insert(fkey, max + 1); }
+                        match &mut panel.def.output_col {
+                            Some(OutputCol::Multi(m)) => {
+                                m.remove(&fkey);
+                                if m.is_empty() {
+                                    panel.def.output_col = None;
+                                }
+                            }
+                            Some(OutputCol::Single(s)) if *s == fkey => {
+                                panel.def.output_col = None;
+                            }
+                            _ => {}
                         }
                         app.dirty = true;
                     }
                     _ => {}
                 }
+            }
+            KeyCode::Char(c @ '1'..='9') if field == StepField::OutputCol => {
+                let group = (c as usize) - ('0' as usize);
+                let fkey = COL_DEFS[*cursor].key.to_string();
+                // Convert to Multi if needed, then assign group number
+                let mut m = match panel.def.output_col.take() {
+                    Some(OutputCol::Multi(m)) => m,
+                    Some(OutputCol::Single(s)) => {
+                        let mut m = std::collections::HashMap::new();
+                        m.insert(s, 0); // existing single gets group 0 (whole match)
+                        m
+                    }
+                    None => std::collections::HashMap::new(),
+                };
+                m.insert(fkey, group);
+                panel.def.output_col = Some(OutputCol::Multi(m));
+                app.dirty = true;
             }
             KeyCode::Char('e') if field == StepField::Pattern => {
                 let text = panel.def.pattern.clone().unwrap_or_default();
@@ -688,7 +758,6 @@ fn close_step_panel(app: &mut App) {
             let insert_idx = app.steps_list_state.selected().map(|i| i + 1).unwrap_or(app.steps.len());
             app.steps.insert(insert_idx, super::tabs::StepState {
                 enabled: true,
-                default_enabled: true,
                 is_custom: true,
                 def,
                 default_def: None,
@@ -718,15 +787,7 @@ pub(crate) fn render_dict_panel(frame: &mut Frame, app: &mut App, area: Rect) {
         _ => return,
     };
 
-    let dropdown_lines = if panel.field_cursor == 2 {
-        match &panel.focus {
-            PanelFocus::Dropdown { .. } | PanelFocus::DropdownEdit { .. } =>
-                panel.variants.len().max(1) as u16,
-            _ => 0,
-        }
-    } else { 0 };
-    let content_lines = 3 + dropdown_lines;
-    let overlay = centered_overlay(area, content_lines);
+    let overlay = centered_overlay(area, app.panel.as_ref().unwrap().content_lines());
     frame.render_widget(Clear, overlay);
 
     let [header_area, body_area, footer_area] = Layout::vertical([
@@ -766,9 +827,11 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
 
         if i == panel.field_cursor {
             if let PanelFocus::InlineEdit { cursor, ref buffer } = panel.focus {
-                let cursor_line = widgets::cursor_line(buffer, cursor);
+                let prefix = format!("  {:16}", label);
+                let avail = area.width.saturating_sub(prefix.len() as u16 + 2) as usize;
+                let cursor_line = widgets::cursor_line(buffer, cursor, avail);
                 let mut spans = vec![
-                    Span::styled(format!("  {:16}", label), Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(prefix, Style::new().fg(Color::White).add_modifier(Modifier::BOLD)),
                 ];
                 spans.extend(cursor_line.spans);
                 lines.push(Line::from(spans));
@@ -779,7 +842,14 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
         let value = match i {
             0 => panel.short.clone(),
             1 => panel.long.clone(),
-            2 => format!("{} variants", panel.variants.len()),
+            2 => if panel.variants.is_empty() {
+                "(none)".to_string()
+            } else {
+                panel.variants.iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
             _ => String::new(),
         };
 
@@ -806,9 +876,11 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
 
                         if let PanelFocus::DropdownEdit { item, cursor: c, buffer } = &panel.focus {
                             if vi == *item {
-                                let cursor_line = widgets::cursor_line(buffer, *c);
+                                let prefix = format!("    {} ", check);
+                                let avail = area.width.saturating_sub(prefix.len() as u16 + 2) as usize;
+                                let cursor_line = widgets::cursor_line(buffer, *c, avail);
                                 let mut spans = vec![
-                                    Span::styled(format!("    {} ", check), Style::new().fg(Color::Cyan)),
+                                    Span::styled(prefix, Style::new().fg(Color::Cyan)),
                                 ];
                                 spans.extend(cursor_line.spans);
                                 lines.push(Line::from(spans));
@@ -834,6 +906,19 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
                             }),
                             display,
                         ]));
+                    }
+                    // New variant being typed (item index beyond existing variants)
+                    if let PanelFocus::DropdownEdit { item, cursor: c, buffer } = &panel.focus {
+                        if *item >= panel.variants.len() {
+                            let prefix = format!("    {} ", widgets::checkbox(true));
+                            let avail = area.width.saturating_sub(prefix.len() as u16 + 2) as usize;
+                            let cursor_line = widgets::cursor_line(buffer, *c, avail);
+                            let mut spans = vec![
+                                Span::styled(prefix, Style::new().fg(Color::Cyan)),
+                            ];
+                            spans.extend(cursor_line.spans);
+                            lines.push(Line::from(spans));
+                        }
                     }
                 }
             }
@@ -868,7 +953,14 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
                             panel.focus = PanelFocus::InlineEdit { cursor: len, buffer: panel.long.clone() };
                         }
                         2 => {
-                            panel.focus = PanelFocus::Dropdown { cursor: 0 };
+                            if panel.variants.is_empty() {
+                                // Go straight to adding a new variant
+                                panel.focus = PanelFocus::DropdownEdit {
+                                    item: 0, cursor: 0, buffer: String::new(),
+                                };
+                            } else {
+                                panel.focus = PanelFocus::Dropdown { cursor: 0 };
+                            }
                         }
                         _ => {}
                     }
@@ -950,7 +1042,7 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
                 if let PanelFocus::DropdownEdit { item, cursor, buffer } = &mut panel.focus {
                     match code {
                         KeyCode::Enter => {
-                            let value = buffer.clone().to_uppercase();
+                            let value = buffer.clone();
                             if !value.is_empty() {
                                 if *item >= panel.variants.len() {
                                     panel.variants.push((value, true));
@@ -977,10 +1069,13 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
 }
 
 fn close_dict_panel(app: &mut App) {
+    use super::tabs::{DictGroupState, GroupStatus};
+
     // Clone fields out of panel to avoid borrow conflict with app mutation
-    let (entry_index, short, long, variants) = match &app.panel {
+    let (entry_index, is_new, short, long, variants) = match &app.panel {
         Some(PanelKind::Dict(d)) => (
             d.entry_index,
+            d.is_new,
             d.short.clone(),
             d.long.clone(),
             d.variants.iter()
@@ -991,20 +1086,38 @@ fn close_dict_panel(app: &mut App) {
         _ => return,
     };
 
-    let entry = &mut app.current_dict_entries_mut()[entry_index];
-    entry.short = short;
-    entry.long = long;
-    entry.variants = variants;
-
-    if entry.status == super::tabs::GroupStatus::Default {
-        if entry.short != entry.original_short
-            || entry.long != entry.original_long
-            || entry.variants != entry.original_variants
-        {
-            entry.status = super::tabs::GroupStatus::Modified;
+    if is_new {
+        if !short.is_empty() {
+            let entries = app.current_dict_entries_mut();
+            entries.push(DictGroupState {
+                short: short.clone(),
+                long: long.clone(),
+                variants: variants.clone(),
+                status: GroupStatus::Added,
+                original_short: short,
+                original_long: long,
+                original_variants: variants,
+            });
+            let len = entries.len();
+            app.dict_list_state.select(Some(len - 1));
+            app.dirty = true;
         }
+    } else {
+        let entry = &mut app.current_dict_entries_mut()[entry_index];
+        entry.short = short;
+        entry.long = long;
+        entry.variants = variants;
+
+        if entry.status == GroupStatus::Default {
+            if entry.short != entry.original_short
+                || entry.long != entry.original_long
+                || entry.variants != entry.original_variants
+            {
+                entry.status = GroupStatus::Modified;
+            }
+        }
+        app.dirty = true;
     }
 
-    app.dirty = true;
     app.panel = None;
 }

@@ -235,10 +235,10 @@ replacement = 'TESTED'
     )
     .unwrap();
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    assert_eq!(summaries[0].label, "na_check");
-    assert_eq!(summaries[1].label, "custom_rewrite_test");
-    assert_eq!(summaries[2].label, "city_state_zip");
+    let summaries = p.steps();
+    assert_eq!(summaries[0].label(), "na_check");
+    assert_eq!(summaries[1].label(), "custom_rewrite_test");
+    assert_eq!(summaries[2].label(), "city_state_zip");
 }
 
 #[test]
@@ -258,9 +258,9 @@ skip_if_filled = true
     )
     .unwrap();
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    let custom = summaries.iter().find(|s| s.label == "custom_po_box_digits").unwrap();
-    assert!(!custom.enabled);
+    let summaries = p.steps();
+    let custom = summaries.iter().find(|s| s.label() == "custom_po_box_digits").unwrap();
+    assert!(!custom.enabled());
 }
 
 #[test]
@@ -379,8 +379,8 @@ output_col = "po_box"
     .unwrap();
     // Should not panic — invalid step is skipped with warning
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    assert!(!summaries.iter().any(|s| s.label == "bad_step"));
+    let summaries = p.steps();
+    assert!(!summaries.iter().any(|s| s.label() == "bad_step"));
     // Default steps still work
     let addr = p.parse("123 Main St");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
@@ -443,14 +443,13 @@ fn test_ordinal_street() {
 
 #[test]
 fn test_source_rewrite_no_side_effects() {
-    // "#007" → hash stripped → "007" → leading zeros stripped → "7"
-    // Unit type is None (bare # unit has no keyword like APT)
+    // "#007" → # captured into unit_type, "007" → leading zeros stripped → "7"
     let p = Pipeline::default();
     let addr = p.parse("123 Main St #007");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
     assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
     assert_eq!(addr.unit.as_deref(), Some("7"));
-    assert!(addr.unit_type.is_none());
+    assert_eq!(addr.unit_type.as_deref(), Some("#"));
 }
 
 #[test]
@@ -494,10 +493,10 @@ pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
 fn test_prepare_steps_in_pipeline() {
     let config = Config::default();
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
+    let summaries = p.steps();
     // First steps should be prepare rules
-    assert_eq!(summaries[0].label, "prep_fix_ampersand");
-    assert_eq!(summaries[0].step_type, "rewrite");
+    assert_eq!(summaries[0].label(), "fix_ampersand");
+    assert_eq!(summaries[0].step_type(), "rewrite");
 }
 
 

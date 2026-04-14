@@ -44,16 +44,9 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
         };
 
         if let Some(table) = abbr.get(table_name) {
-            let values = match (table_name, accessor) {
-                ("state", _) => table.bounded_regex(),
-                ("unit_type", None) => table
-                    .all_values()
-                    .into_iter()
-                    .filter(|v| *v != "#")
-                    .collect::<Vec<_>>()
-                    .join("|"),
-                (_, Some("short")) => table.short_values().join("|"),
-                _ => table.all_values().join("|"),
+            let values = match accessor {
+                Some("short") => table.short_values().join("|"),
+                _ => table.bounded_regex(),
             };
             let before = &result[..start];
             let after = &result[end + 1..];
@@ -151,87 +144,107 @@ fn resolve_template_token(token: &str, caps: &Captures, tables: &Abbreviations) 
     caps.get(group_num).map(|m| m.as_str().to_string()).unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StandardizeMode {
-    WholeField,
-    PerWord,
+/// Expand a simple replacement template using pre-extracted capture groups.
+///
+/// Supports `$N` syntax only (no `${N:table}` or `${N/M:fraction}`).
+/// Used by extract steps where captures are already collected as strings.
+fn expand_groups(template: &str, groups: &[Option<String>]) -> String {
+    let mut result = String::with_capacity(template.len());
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            let n = (chars[i + 1] as u8 - b'0') as usize;
+            if let Some(Some(val)) = groups.get(n) {
+                result.push_str(val);
+            }
+            i += 2;
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    result
 }
 
+// ---------------------------------------------------------------------------
+// Compiled step types
+// ---------------------------------------------------------------------------
+
+/// The compiled data that differs between step types.
+/// String fields shared by both types live in `StepDef`.
 #[derive(Debug)]
-pub enum Step {
+enum CompiledStep {
     Rewrite {
-        label: String,
-        pattern: Regex,
-        pattern_template: String,
-        replacement: Option<String>,
-        rewrite_table: Option<String>,
+        pattern: Option<Regex>,
         source: Option<Col>,
-        enabled: bool,
     },
     Extract {
-        label: String,
         pattern: Regex,
         pattern_template: String,
         target: Option<Col>,
         targets: Option<std::collections::HashMap<Col, usize>>,
-        skip_if_filled: bool,
-        replacement: Option<(Regex, String)>,
         source: Option<Col>,
-        enabled: bool,
-    },
-    Standardize {
-        label: String,
-        target: Col,
-        table: String,
-        pattern: Option<(Regex, String)>,
-        mode: StandardizeMode,
-        enabled: bool,
     },
 }
 
+/// A compiled, ready-to-execute pipeline step.
+///
+/// Holds the original `StepDef` (for serialization, display, diffing)
+/// plus compiled regex and parsed column enums.
+#[derive(Debug)]
+pub struct Step {
+    pub def: StepDef,
+    pub enabled: bool,
+    compiled: CompiledStep,
+}
+
 impl Step {
-    pub fn label(&self) -> &str {
-        match self {
-            Step::Rewrite { label, .. } => label,
-            Step::Extract { label, .. } => label,
-            Step::Standardize { label, .. } => label,
-        }
-    }
-
-    pub fn enabled(&self) -> bool {
-        match self {
-            Step::Rewrite { enabled, .. } => *enabled,
-            Step::Extract { enabled, .. } => *enabled,
-            Step::Standardize { enabled, .. } => *enabled,
-        }
-    }
-
-    pub fn set_enabled(&mut self, value: bool) {
-        match self {
-            Step::Rewrite { enabled, .. } => *enabled = value,
-            Step::Extract { enabled, .. } => *enabled = value,
-            Step::Standardize { enabled, .. } => *enabled = value,
-        }
-    }
+    pub fn label(&self) -> &str { &self.def.label }
+    pub fn enabled(&self) -> bool { self.enabled }
+    pub fn set_enabled(&mut self, value: bool) { self.enabled = value; }
 
     pub fn pattern_template(&self) -> Option<&str> {
-        match self {
-            Step::Rewrite {
-                pattern_template, ..
-            } => Some(pattern_template),
-            Step::Extract {
-                pattern_template, ..
-            } => Some(pattern_template),
-            Step::Standardize { .. } => None,
+        match &self.compiled {
+            CompiledStep::Rewrite { pattern, .. } => {
+                if pattern.is_some() { self.def.pattern.as_deref() } else { None }
+            }
+            CompiledStep::Extract { pattern_template, .. } => Some(pattern_template),
         }
     }
 
-    pub fn step_type(&self) -> &'static str {
-        match self {
-            Step::Rewrite { .. } => "rewrite",
-            Step::Extract { .. } => "extract",
-            Step::Standardize { .. } => "standardize",
+    pub fn step_type(&self) -> &str { &self.def.step_type }
+}
+
+// ---------------------------------------------------------------------------
+// Step execution
+// ---------------------------------------------------------------------------
+
+/// Scan `s` for all non-overlapping matches of `re`, compute a replacement for each
+/// via `make_replacement`, and apply them in reverse order to preserve positions.
+fn replace_all_captures(
+    s: &mut String,
+    re: &Regex,
+    mut make_replacement: impl FnMut(&Captures) -> String,
+) {
+    let mut replacements = Vec::new();
+    let mut pos = 0;
+    while pos <= s.len() {
+        match re.captures(&s[pos..]) {
+            Ok(Some(caps)) => {
+                let full = caps.get(0).unwrap();
+                let abs_start = pos + full.start();
+                let abs_end = pos + full.end();
+                replacements.push((abs_start, abs_end, make_replacement(&caps)));
+                if abs_end == abs_start { pos = abs_end + 1; } else { pos = abs_end; }
+            }
+            _ => break,
         }
+    }
+    for (start, end, repl) in replacements.into_iter().rev() {
+        s.replace_range(start..end, &repl);
     }
 }
 
@@ -255,12 +268,12 @@ pub fn apply_step(
     tables: &Abbreviations,
     output: &crate::config::OutputConfig,
 ) {
-    if !step.enabled() {
+    if !step.enabled {
         return;
     }
 
-    match step {
-        Step::Rewrite { pattern, replacement, rewrite_table, source, .. } => {
+    match &step.compiled {
+        CompiledStep::Rewrite { pattern, source } => {
             let target_str = match source {
                 Some(field) => match state.fields.field(*field) {
                     Some(v) => v.clone(),
@@ -268,58 +281,67 @@ pub fn apply_step(
                 },
                 None => state.working.clone(),
             };
-            if !pattern.is_match(&target_str).unwrap_or(false) {
-                return;
-            }
-            let mut result = target_str;
-            if let Some(table_name) = rewrite_table {
-                if let Some(table) = tables.get(table_name) {
-                    for (short, long) in table.short_to_long_pairs() {
-                        let re = Regex::new(&format!(r"\b{}\b", fancy_regex::escape(&short))).unwrap();
-                        replace_pattern(&mut result, &re, &long);
+
+            let replacement = step.def.replacement.as_deref();
+            let table_name = step.def.table.as_deref();
+            let mode = step.def.mode.as_deref();
+
+            let mut result = if let Some(table_name) = table_name {
+                let t = match tables.get(table_name) {
+                    Some(t) => t,
+                    None => return,
+                };
+                let fmt = source
+                    .map(|f| output.format_for_field(f))
+                    .unwrap_or(OutputFormat::Long);
+
+                if mode == Some("per_word") {
+                    target_str.split_whitespace()
+                        .map(|w| standardize_value(w, t, fmt))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else if let Some(re) = pattern {
+                    if !re.is_match(&target_str).unwrap_or(false) {
+                        return;
                     }
-                }
-            } else if let Some(repl) = replacement {
-                if repl.contains("${") {
-                    // Table lookup replacement — replace all matches right-to-left
-                    let mut matches = Vec::new();
-                    let mut search_start = 0;
-                    while search_start <= result.len() {
-                        if let Ok(Some(caps)) = pattern.captures(&result[search_start..]) {
-                            if let Some(full_match) = caps.get(0) {
-                                let abs_start = search_start + full_match.start();
-                                let abs_end = search_start + full_match.end();
-                                let expanded = expand_replacement(repl, &caps, tables);
-                                matches.push((abs_start, abs_end, expanded));
-                                if abs_end == full_match.start() {
-                                    // zero-width match — advance by one char to avoid infinite loop
-                                    search_start = abs_end + 1;
-                                } else {
-                                    search_start = abs_end;
-                                }
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    // Replace right-to-left to preserve offsets
-                    for (start, end, expanded) in matches.into_iter().rev() {
-                        result.replace_range(start..end, &expanded);
-                    }
+                    let mut s = target_str;
+                    replace_all_captures(&mut s, re, |caps| {
+                        let full = caps.get(0).unwrap();
+                        let captured = caps.get(1).unwrap_or(full).as_str();
+                        standardize_value(captured, t, fmt)
+                    });
+                    s
                 } else {
-                    replace_pattern(&mut result, pattern, repl);
+                    standardize_value(&target_str, t, fmt)
                 }
-            }
+            } else if let Some(re) = pattern {
+                if !re.is_match(&target_str).unwrap_or(false) {
+                    return;
+                }
+                let mut s = target_str;
+                if let Some(repl) = replacement {
+                    if repl.contains("${") {
+                        replace_all_captures(&mut s, re, |caps| {
+                            expand_replacement(repl, caps, tables)
+                        });
+                    } else {
+                        replace_pattern(&mut s, re, repl);
+                    }
+                }
+                s
+            } else {
+                return;
+            };
+
             squish(&mut result);
             match source {
                 Some(field) => *state.fields.field_mut(*field) = none_if_empty(result),
                 None => state.working = result,
             }
         }
-        Step::Extract { pattern, target, targets, skip_if_filled, replacement, source, .. } => {
-            if *skip_if_filled {
+        CompiledStep::Extract { pattern, target, targets, source, .. } => {
+            let skip_if_filled = step.def.skip_if_filled.unwrap_or(false);
+            if skip_if_filled {
                 if let Some(targets_map) = targets {
                     if targets_map.keys().any(|f| state.fields.field(*f).is_some()) {
                         return;
@@ -353,53 +375,21 @@ pub fn apply_step(
                         }
                     }
                 } else if let Some(target_field) = target {
-                    let mut val = groups[0].clone().unwrap_or_default();
-                    if let Some((re, repl)) = replacement {
-                        replace_pattern(&mut val, re, repl);
-                    }
+                    let val = if let Some(ref repl) = step.def.replacement {
+                        expand_groups(repl, &groups)
+                    } else {
+                        groups[0].clone().unwrap_or_default()
+                    };
                     *state.fields.field_mut(*target_field) = none_if_empty(val);
-                }
-            }
-        }
-        Step::Standardize { target, table, pattern, mode, .. } => {
-            // Handle regex-based standardize (like po_box)
-            if let Some((re, repl)) = pattern {
-                if let Some(val) = state.fields.field(*target) {
-                    let mut result = val.clone();
-                    replace_pattern(&mut result, re, repl);
-                    *state.fields.field_mut(*target) = none_if_empty(result);
-                }
-                return;
-            }
-
-            // Table-based standardize
-            let val = match state.fields.field(*target) {
-                Some(v) => v.to_string(),
-                None => return,
-            };
-
-            let t = match tables.get(table) {
-                Some(t) => t,
-                None => return,
-            };
-
-            let fmt = output.format_for_field(*target);
-
-            match mode {
-                StandardizeMode::WholeField => {
-                    *state.fields.field_mut(*target) = Some(standardize_value(&val, t, fmt));
-                }
-                StandardizeMode::PerWord => {
-                    let words: Vec<&str> = val.split_whitespace().collect();
-                    let result: Vec<String> = words.iter()
-                        .map(|w| standardize_value(w, t, fmt))
-                        .collect();
-                    *state.fields.field_mut(*target) = Some(result.join(" "));
                 }
             }
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// StepDef and compilation
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -436,7 +426,6 @@ pub struct StepsDef {
 
 /// Compile a single StepDef into a Step, expanding table references in patterns.
 pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String> {
-    // Parse output_col into (target, targets) for the compiled Step
     let (parsed_target, parsed_targets) = match &def.output_col {
         Some(OutputCol::Single(name)) => (Some(Col::from_key(name)?), None),
         Some(OutputCol::Multi(map)) => {
@@ -453,21 +442,22 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
 
     match def.step_type.as_str() {
         "rewrite" => {
-            let template = def
-                .pattern
-                .as_ref()
-                .ok_or_else(|| format!("rewrite step '{}' missing pattern", def.label))?;
-            let expanded = expand_template(template, abbr);
-            let pattern = Regex::new(&expanded)
-                .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?;
-            Ok(Step::Rewrite {
-                label: def.label.clone(),
-                pattern,
-                pattern_template: template.clone(),
-                replacement: def.replacement.clone(),
-                rewrite_table: def.table.clone(),
-                source,
+            let pattern = if let Some(ref template) = def.pattern {
+                let expanded = expand_template(template, abbr);
+                Some(Regex::new(&expanded)
+                    .map_err(|e| format!("Bad regex in step '{}': {}", def.label, e))?)
+            } else {
+                None
+            };
+
+            if pattern.is_none() && def.table.is_none() {
+                return Err(format!("rewrite step '{}' needs pattern or table", def.label));
+            }
+
+            Ok(Step {
+                def: def.clone(),
                 enabled: true,
+                compiled: CompiledStep::Rewrite { pattern, source },
             })
         }
         "extract" => {
@@ -504,68 +494,16 @@ pub fn compile_step(def: &StepDef, abbr: &Abbreviations) -> Result<Step, String>
                 return Err(format!("extract step '{}' missing output_col", def.label));
             }
 
-            let replacement = if let Some(ref r) = def.replacement {
-                let expanded_r = expand_template(r, abbr);
-                Some((
-                    Regex::new(&expanded).map_err(|e| {
-                        format!("Bad replacement regex in step '{}': {}", def.label, e)
-                    })?,
-                    expanded_r,
-                ))
-            } else {
-                None
-            };
-
-            Ok(Step::Extract {
-                label: def.label.clone(),
-                pattern,
-                pattern_template: template,
-                target: parsed_target,
-                targets: parsed_targets,
-                skip_if_filled: def.skip_if_filled.unwrap_or(false),
-                replacement,
-                source,
+            Ok(Step {
+                def: def.clone(),
                 enabled: true,
-            })
-        }
-        "standardize" => {
-            let target = parsed_target
-                .ok_or_else(|| format!("standardize step '{}' missing output_col", def.label))?;
-            if parsed_targets.is_some() {
-                return Err(format!("standardize step '{}' cannot use multi output_col", def.label));
-            }
-            let mode = match def.mode.as_deref() {
-                Some("per_word") => StandardizeMode::PerWord,
-                _ => StandardizeMode::WholeField,
-            };
-
-            let pattern = if let Some(ref p) = def.pattern {
-                let expanded = expand_template(p, abbr);
-                let re = Regex::new(&expanded)
-                    .map_err(|e| format!("standardize step '{}' bad pattern: {}", def.label, e))?;
-                let repl = def.replacement.clone().unwrap_or_default();
-                Some((re, repl))
-            } else {
-                None
-            };
-
-            let table = if pattern.is_none() {
-                def.table.clone()
-                    .ok_or_else(|| format!(
-                        "standardize step '{}' needs either pattern+replacement or table",
-                        def.label
-                    ))?
-            } else {
-                def.table.clone().unwrap_or_default()
-            };
-
-            Ok(Step::Standardize {
-                label: def.label.clone(),
-                target,
-                table,
-                pattern,
-                mode,
-                enabled: true,
+                compiled: CompiledStep::Extract {
+                    pattern,
+                    pattern_template: template,
+                    target: parsed_target,
+                    targets: parsed_targets,
+                    source,
+                },
             })
         }
         other => Err(format!(
@@ -592,9 +530,9 @@ mod tests {
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
         assert!(defs.step.len() > 20, "Expected 20+ steps, got {}", defs.step.len());
         assert_eq!(defs.step[0].step_type, "rewrite");
-        assert_eq!(defs.step[0].label, "prep_fix_ampersand");
+        assert_eq!(defs.step[0].label, "fix_ampersand");
         let last = defs.step.last().unwrap();
-        assert_eq!(last.step_type, "standardize");
+        assert_eq!(last.step_type, "rewrite");
     }
 
     #[test]
@@ -606,7 +544,7 @@ mod tests {
         let steps = compile_steps(&defs.step, &abbr);
         assert!(steps.len() > 20);
         assert_eq!(steps[0].step_type(), "rewrite");
-        assert_eq!(steps[0].label(), "prep_fix_ampersand");
+        assert_eq!(steps[0].label(), "fix_ampersand");
     }
 
     #[test]
@@ -673,16 +611,17 @@ table = "street_name_abbr"
     }
 
     #[test]
-    fn test_apply_standardize_step() {
+    fn test_apply_rewrite_table_on_field() {
         use crate::address::AddressState;
         use crate::tables::abbreviations::build_default_tables;
         use crate::config::OutputConfig;
         let abbr = build_default_tables();
         let def = StepDef {
-            step_type: "standardize".to_string(),
+            step_type: "rewrite".to_string(),
             label: "std_suffix".to_string(),
             table: Some("suffix_all".to_string()),
             output_col: Some(OutputCol::Single("suffix".to_string())),
+            input_col: Some("suffix".to_string()),
             ..Default::default()
         };
         let step = compile_step(&def, &abbr).unwrap();
@@ -690,7 +629,6 @@ table = "street_name_abbr"
         let mut state = AddressState::new_from_prepared(String::new());
         state.fields.suffix = Some("AV".to_string());
         apply_step(&mut state, &step, &abbr, &output);
-        // AV → finds AVENUE group → canonical long (default output) = AVENUE
         assert_eq!(state.fields.suffix.as_deref(), Some("AVENUE"));
     }
 
@@ -721,12 +659,13 @@ table = "street_name_abbr"
     }
 
     #[test]
-    fn test_expand_template_unit_type_excludes_hash() {
+    fn test_expand_template_unit_type_includes_all() {
         use crate::tables::abbreviations::build_default_tables;
         let abbr = build_default_tables();
         let expanded = expand_template("{unit_type}", &abbr);
-        assert!(!expanded.contains("#"));
         assert!(expanded.contains("APARTMENT"));
+        // # is included in the bounded regex; \b in the step pattern prevents false matches
+        assert!(expanded.contains("#"));
     }
 
     #[test]
@@ -908,5 +847,20 @@ skip_if_filled = true
         let caps = re.captures("8 1/2").unwrap().unwrap();
         let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
         assert_eq!(result, "EIGHT AND ONEHALF");
+    }
+
+    #[test]
+    fn test_expand_groups() {
+        let groups = vec![
+            Some("P O BOX 123".to_string()),
+            Some("123".to_string()),
+        ];
+        assert_eq!(expand_groups("PO BOX $1", &groups), "PO BOX 123");
+    }
+
+    #[test]
+    fn test_expand_groups_missing() {
+        let groups = vec![Some("FULL".to_string())];
+        assert_eq!(expand_groups("$0 keep $1", &groups), "FULL keep ");
     }
 }

@@ -12,10 +12,6 @@ pub const STEP_TYPES: &[StepTypeMeta] = &[
         name: "rewrite",
         display: "Rewrite",
     },
-    StepTypeMeta {
-        name: "standardize",
-        display: "Standardize",
-    },
 ];
 
 pub fn find_step_type(name: &str) -> Option<&'static StepTypeMeta> {
