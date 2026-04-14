@@ -1093,10 +1093,12 @@ fn close_dict_panel(app: &mut App) {
                 short: short.clone(),
                 long: long.clone(),
                 variants: variants.clone(),
+                tags: vec![],
                 status: GroupStatus::Added,
                 original_short: short,
                 original_long: long,
                 original_variants: variants,
+                original_tags: vec![],
             });
             let len = entries.len();
             app.dict_list_state.select(Some(len - 1));

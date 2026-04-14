@@ -150,11 +150,13 @@ pub fn build_number_tables() -> (AbbrTable, AbbrTable) {
             short: n.to_string(),
             long: cardinal(n),
             variants: vec![],
+            tags: vec![],
         });
         ordinal_groups.push(AbbrGroup {
             short: n.to_string(),
             long: ordinal(n),
             variants: vec![],
+            tags: vec![],
         });
     }
 

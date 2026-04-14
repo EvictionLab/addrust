@@ -144,15 +144,97 @@ impl App {
         }
 
         // Build dictionary states
-        let table_names: Vec<String> = default_tables
+        // Filter out suffix_all/suffix_common, add unified "suffix" entry
+        let mut table_names: Vec<String> = default_tables
             .table_names()
             .iter()
+            .filter(|s| **s != "suffix_all" && **s != "suffix_common")
             .map(|s| s.to_string())
             .collect();
+
+        // Insert "suffix" in sorted position
+        let suffix_pos = table_names.partition_point(|n| n.as_str() < "suffix");
+        table_names.insert(suffix_pos, "suffix".to_string());
 
         let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
             .map(|name| {
+                // For suffix, build from suffix_source (preserves tags)
+                if name == "suffix" {
+                    let source_groups = default_tables.suffix_source()
+                        .expect("suffix_source should be available");
+                    let overrides = config.dictionaries.get("suffix");
+
+                    let mut entries: Vec<DictGroupState> = source_groups
+                        .iter()
+                        .map(|g| {
+                            let mut status = GroupStatus::Default;
+                            let mut long = g.long.clone();
+                            let mut variants = g.variants.clone();
+
+                            if let Some(ov) = overrides {
+                                let is_removed = ov.remove.iter().any(|r| {
+                                    let upper = r.to_uppercase();
+                                    g.short == upper || g.long == upper
+                                });
+                                if is_removed {
+                                    status = GroupStatus::Removed;
+                                }
+                                for o in &ov.override_entries {
+                                    if o.short.to_uppercase() == g.short {
+                                        long = o.long.to_uppercase();
+                                        variants = o.variants.clone();
+                                        status = GroupStatus::Modified;
+                                    }
+                                }
+                            }
+
+                            DictGroupState {
+                                short: g.short.clone(),
+                                long,
+                                variants,
+                                tags: g.tags.clone(),
+                                status,
+                                original_short: g.short.clone(),
+                                original_long: g.long.clone(),
+                                original_variants: g.variants.clone(),
+                                original_tags: g.tags.clone(),
+                            }
+                        })
+                        .collect();
+
+                    if let Some(ov) = overrides {
+                        for add in &ov.add {
+                            let short = add.short.to_uppercase();
+                            let long = add.long.to_uppercase();
+                            let existing = entries.iter_mut().find(|e| e.short == short);
+                            if let Some(e) = existing {
+                                for v in &add.variants {
+                                    if !e.variants.contains(v) {
+                                        e.variants.push(v.clone());
+                                    }
+                                }
+                                e.status = GroupStatus::Modified;
+                            } else {
+                                entries.push(DictGroupState {
+                                    short: short.clone(),
+                                    long: long.clone(),
+                                    variants: add.variants.clone(),
+                                    tags: vec![],
+                                    status: GroupStatus::Added,
+                                    original_short: short,
+                                    original_long: long,
+                                    original_variants: Vec::new(),
+                                    original_tags: Vec::new(),
+                                });
+                            }
+                        }
+                    }
+
+                    return entries;
+                }
+
+                // Non-suffix tables
                 let table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
@@ -188,10 +270,12 @@ impl App {
                             short: g.short.clone(),
                             long,
                             variants,
+                            tags: vec![],
                             status,
                             original_short: g.short.clone(),
                             original_long: g.long.clone(),
                             original_variants: g.variants.clone(),
+                            original_tags: vec![],
                         }
                     })
                     .collect();
@@ -216,10 +300,12 @@ impl App {
                                 short: short.clone(),
                                 long: long.clone(),
                                 variants: add.variants.clone(),
+                                tags: vec![],
                                 status: GroupStatus::Added,
                                 original_short: short,
                                 original_long: long,
                                 original_variants: Vec::new(),
+                                original_tags: Vec::new(),
                             });
                         }
                     }
@@ -671,10 +757,12 @@ mod tests {
                 short: "TEST".to_string(),
                 long: "TESTING".to_string(),
                 variants: vec!["TST".to_string()],
+                tags: vec![],
                 status: GroupStatus::Added,
                 original_short: "TEST".to_string(),
                 original_long: "TESTING".to_string(),
                 original_variants: Vec::new(),
+                original_tags: Vec::new(),
             });
             let config = app.to_config();
             let name = &app.table_names[0];

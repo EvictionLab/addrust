@@ -26,11 +26,13 @@ pub(crate) struct DictGroupState {
     pub(crate) short: String,
     pub(crate) long: String,
     pub(crate) variants: Vec<String>,
+    pub(crate) tags: Vec<String>,
     pub(crate) status: GroupStatus,
     /// Original values for tracking overrides.
     pub(crate) original_short: String,
     pub(crate) original_long: String,
     pub(crate) original_variants: Vec<String>,
+    pub(crate) original_tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -562,11 +564,16 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Check if this is a value-list table
     let is_value_list = {
-        let tables = build_default_tables();
-        tables
-            .get(&app.table_names[app.dict_tab_index])
-            .map(|t| t.is_value_list())
-            .unwrap_or(false)
+        let table_name = &app.table_names[app.dict_tab_index];
+        if table_name == "suffix" {
+            false // suffix is always a short/long table
+        } else {
+            let tables = build_default_tables();
+            tables
+                .get(table_name)
+                .map(|t| t.is_value_list())
+                .unwrap_or(false)
+        }
     };
 
     // Build table rows from entries
