@@ -122,7 +122,7 @@ replacement = '${1:number_ordinal}'
 [[step]]
 type = "rewrite"
 label = "unstick_suffix_unit"
-pattern = '\b({suffix_common})({unit_type})\b'
+pattern = '\b({suffix:common})({unit_type})\b'
 replacement = '$1 $2'
 
 # --- Extra front ---
@@ -191,14 +191,14 @@ skip_if_filled = true
 [[step]]
 type = "extract"
 label = "suffix_common"
-pattern = '(?<!^)\b({suffix_common})\s*$'
+pattern = '(?<!^)\b({suffix:common})\s*$'
 output_col = "suffix"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "suffix_all"
-pattern = '(?<!^)\b({suffix_all})\s*$'
+pattern = '(?<!^)\b({suffix})\s*$'
 output_col = "suffix"
 skip_if_filled = true
 
@@ -270,7 +270,7 @@ table = "direction"
 type = "rewrite"
 label = "standardize_suffix"
 input_col = "suffix"
-table = "suffix_all"
+table = "suffix"
 
 [[step]]
 type = "rewrite"

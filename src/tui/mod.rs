@@ -148,17 +148,11 @@ impl App {
         }
 
         // Build dictionary states
-        // Filter out suffix_all/suffix_common, add unified "suffix" entry
-        let mut table_names: Vec<String> = default_tables
+        let table_names: Vec<String> = default_tables
             .table_names()
             .iter()
-            .filter(|s| **s != "suffix_all" && **s != "suffix_common")
             .map(|s| s.to_string())
             .collect();
-
-        // Insert "suffix" in sorted position
-        let suffix_pos = table_names.partition_point(|n| n.as_str() < "suffix");
-        table_names.insert(suffix_pos, "suffix".to_string());
 
         let dict_is_value_list: Vec<bool> = table_names.iter()
             .map(|name| {
@@ -171,75 +165,6 @@ impl App {
         let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
             .map(|name| {
-                // For suffix, build from suffix_source (preserves tags)
-                if name == "suffix" {
-                    let source_groups = default_tables.suffix_source()
-                        .expect("suffix_source should be available");
-                    let overrides = config.dictionaries.get("suffix_all");
-
-                    let mut entries: Vec<DictGroupState> = source_groups
-                        .iter()
-                        .map(|g| {
-                            let mut status = GroupStatus::Default;
-                            let long = g.long.clone();
-                            let variants = g.variants.clone();
-
-                            if let Some(ov) = overrides {
-                                let is_removed = ov.remove.iter().any(|r| {
-                                    let upper = r.to_uppercase();
-                                    g.short == upper || g.long == upper
-                                });
-                                if is_removed {
-                                    status = GroupStatus::Removed;
-                                }
-                            }
-
-                            DictGroupState {
-                                short: g.short.clone(),
-                                long,
-                                variants,
-                                tags: g.tags.clone(),
-                                status,
-                                original_short: g.short.clone(),
-                                original_long: g.long.clone(),
-                                original_variants: g.variants.clone(),
-                                original_tags: g.tags.clone(),
-                            }
-                        })
-                        .collect();
-
-                    if let Some(ov) = overrides {
-                        for add in &ov.add {
-                            let short = add.short.to_uppercase();
-                            let long = add.long.to_uppercase();
-                            let existing = entries.iter_mut().find(|e| e.short == short);
-                            if let Some(e) = existing {
-                                for v in &add.variants {
-                                    if !e.variants.contains(v) {
-                                        e.variants.push(v.clone());
-                                    }
-                                }
-                                e.status = GroupStatus::Modified;
-                            } else {
-                                entries.push(DictGroupState {
-                                    short: short.clone(),
-                                    long: long.clone(),
-                                    variants: add.variants.clone(),
-                                    tags: vec![],
-                                    status: GroupStatus::Added,
-                                    original_short: short,
-                                    original_long: long,
-                                    original_variants: Vec::new(),
-                                    original_tags: Vec::new(),
-                                });
-                            }
-                        }
-                    }
-
-                    return entries;
-                }
-
-                // Non-suffix tables
                 let table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
@@ -438,6 +363,7 @@ impl App {
                             long: entry.long.clone(),
                             variants: entry.variants.clone(),
                             canonical: None,
+                            tags: entry.tags.clone(),
                         });
                     }
                     GroupStatus::Removed => {
@@ -449,6 +375,7 @@ impl App {
                             long: entry.long.clone(),
                             variants: entry.variants.clone(),
                             canonical: Some(true),
+                            tags: entry.tags.clone(),
                         });
                     }
                     GroupStatus::Default => {}
@@ -456,13 +383,7 @@ impl App {
             }
 
             if !overrides.add.is_empty() || !overrides.remove.is_empty() {
-                // Map TUI's unified "suffix" table to the pipeline's "suffix_all" config key
-                let config_key = if name == "suffix" {
-                    "suffix_all".to_string()
-                } else {
-                    name.clone()
-                };
-                config.dictionaries.insert(config_key, overrides);
+                config.dictionaries.insert(name.clone(), overrides);
             }
         }
 

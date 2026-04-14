@@ -184,6 +184,41 @@ impl AbbrTable {
         self.all_match_values().into_iter().filter(|v| !v.is_empty()).collect()
     }
 
+    /// Groups that have a specific tag.
+    pub fn groups_with_tag(&self, tag: &str) -> Vec<&AbbrGroup> {
+        self.groups.iter().filter(|g| g.tags.contains(&tag.to_string())).collect()
+    }
+
+    /// All unique values from groups matching a tag, sorted longest-first.
+    /// Skips empty strings.
+    pub fn all_values_with_tag(&self, tag: &str) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
+        let mut values = Vec::new();
+        for group in &self.groups {
+            if !group.tags.contains(&tag.to_string()) { continue; }
+            if seen.insert(group.short.as_str()) { values.push(group.short.as_str()); }
+            if seen.insert(group.long.as_str()) { values.push(group.long.as_str()); }
+            for v in &group.variants {
+                if seen.insert(v.as_str()) { values.push(v.as_str()); }
+            }
+        }
+        values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+        values.into_iter().filter(|v| !v.is_empty()).collect()
+    }
+
+    /// Bounded regex from values matching a tag.
+    pub fn bounded_regex_with_tag(&self, tag: &str) -> String {
+        let values = self.all_values_with_tag(tag);
+        let parts: Vec<String> = values.iter().map(|v| {
+            if has_regex_chars(v) {
+                v.to_string()
+            } else {
+                fancy_regex::escape(v).to_string()
+            }
+        }).collect();
+        format!(r"(?:{})", parts.join("|"))
+    }
+
     /// Apply dictionary overrides: remove groups by any value match, then add/merge groups.
     pub fn patch(&self, overrides: &crate::config::DictOverrides) -> Self {
         let mut groups = self.groups.clone();
@@ -226,6 +261,13 @@ impl AbbrTable {
                         group.variants.push(v.clone());
                     }
                 }
+                // Merge tags from entry
+                for t in &entry.tags {
+                    let upper = t.to_uppercase();
+                    if !group.tags.contains(&upper) {
+                        group.tags.push(upper);
+                    }
+                }
                 if is_canonical {
                     // Demote old canonical short to variant (if different from new)
                     if group.short != short {
@@ -245,7 +287,12 @@ impl AbbrTable {
                 }
             } else {
                 // New group
-                groups.push(AbbrGroup::new(short, long, new_variants));
+                groups.push(AbbrGroup {
+                    short: short.to_uppercase(),
+                    long: long.to_uppercase(),
+                    variants: new_variants,
+                    tags: entry.tags.iter().map(|t| t.to_uppercase()).collect(),
+                });
             }
         }
 
@@ -305,17 +352,11 @@ fn strip_zero_width_assertions(pattern: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct Abbreviations {
     tables: HashMap<String, AbbrTable>,
-    suffix_source: Option<Vec<AbbrGroup>>,
 }
 
 impl Abbreviations {
     pub fn get(&self, table_type: &str) -> Option<&AbbrTable> {
         self.tables.get(table_type)
-    }
-
-    /// The original suffix groups with tags preserved (for TUI display).
-    pub fn suffix_source(&self) -> Option<&[AbbrGroup]> {
-        self.suffix_source.as_deref()
     }
 
     /// Apply config overrides to matching tables, returning a new Abbreviations.
@@ -326,7 +367,7 @@ impl Abbreviations {
                 tables.insert(name.clone(), table.patch(overrides));
             }
         }
-        Abbreviations { tables, suffix_source: self.suffix_source.clone() }
+        Abbreviations { tables }
     }
 
     /// List available table names.
@@ -380,14 +421,12 @@ pub fn load_tables_from_toml(toml_str: &str) -> HashMap<String, AbbrTable> {
         .collect()
 }
 
-/// Load suffix table from TOML, producing both suffix_all and suffix_common.
-/// suffix_common is derived by filtering groups with tags containing "common".
-/// Returns (tables, source_groups) where source_groups preserves tags for TUI display.
-pub fn load_suffixes_from_toml(toml_str: &str) -> (HashMap<String, AbbrTable>, Vec<AbbrGroup>) {
+/// Load suffix table from TOML, producing one "suffix" entry with tags preserved.
+pub fn load_suffixes_from_toml(toml_str: &str) -> HashMap<String, AbbrTable> {
     let raw: SuffixFileDef = toml::from_str(toml_str)
         .expect("Failed to parse suffixes TOML");
 
-    let source_groups: Vec<AbbrGroup> = raw.suffix.groups.into_iter()
+    let groups: Vec<AbbrGroup> = raw.suffix.groups.into_iter()
         .map(|g| AbbrGroup {
             short: g.short,
             long: g.long,
@@ -396,15 +435,9 @@ pub fn load_suffixes_from_toml(toml_str: &str) -> (HashMap<String, AbbrTable>, V
         })
         .collect();
 
-    let common_groups: Vec<AbbrGroup> = source_groups.iter()
-        .filter(|g| g.tags.contains(&"common".to_string()))
-        .cloned()
-        .collect();
-
     let mut tables = HashMap::new();
-    tables.insert("suffix_all".to_string(), AbbrTable::from_groups(source_groups.clone()));
-    tables.insert("suffix_common".to_string(), AbbrTable::from_groups(common_groups));
-    (tables, source_groups)
+    tables.insert("suffix".to_string(), AbbrTable::from_groups(groups));
+    tables
 }
 
 /// Build the default abbreviation tables (non-static, for patching).
@@ -412,14 +445,13 @@ pub fn load_default_tables() -> Abbreviations {
     let mut tables = load_tables_from_toml(
         include_str!("../../data/defaults/tables.toml")
     );
-    let (suffix_tables, suffix_source) = load_suffixes_from_toml(
+    tables.extend(load_suffixes_from_toml(
         include_str!("../../data/defaults/suffixes.toml")
-    );
-    tables.extend(suffix_tables);
+    ));
     let (number_cardinal, number_ordinal) = crate::tables::numbers::build_number_tables();
     tables.insert("number_cardinal".to_string(), number_cardinal);
     tables.insert("number_ordinal".to_string(), number_ordinal);
-    Abbreviations { tables, suffix_source: Some(suffix_source) }
+    Abbreviations { tables }
 }
 
 #[cfg(test)]
@@ -608,6 +640,7 @@ mod tests {
                 short: "NE".into(), long: "NORTHEAST".into(),
                 variants: vec!["N E".into(), "NEAST".into()],
                 canonical: None,
+                ..Default::default()
             }],
             remove: vec![],
         };
@@ -627,6 +660,7 @@ mod tests {
                 short: "NEAST".into(), long: "NORTHEAST".into(),
                 variants: vec![],
                 canonical: Some(true),
+                ..Default::default()
             }],
             remove: vec![],
         };
@@ -646,6 +680,7 @@ mod tests {
                 short: "WH".into(), long: "WAREHOUSE".into(),
                 variants: vec!["WHSE".into()],
                 canonical: None,
+                ..Default::default()
             }],
             remove: vec![],
         };
@@ -730,24 +765,27 @@ groups = [
     { short = "BLVD", long = "BOULEVARD", tags = ["common"] },
 ]
 "#;
-        let (tables, source_groups) = load_suffixes_from_toml(toml_str);
+        let tables = load_suffixes_from_toml(toml_str);
 
-        let all = tables.get("suffix_all").unwrap();
-        assert_eq!(all.groups.len(), 3);
-        assert_eq!(all.to_long("AV"), Some("AVENUE"));
-        assert_eq!(all.to_long("STRA"), Some("STRAVENUE"));
+        let suffix = tables.get("suffix").unwrap();
+        assert_eq!(suffix.groups.len(), 3);
+        assert_eq!(suffix.to_long("AV"), Some("AVENUE"));
+        assert_eq!(suffix.to_long("STRA"), Some("STRAVENUE"));
+        assert_eq!(suffix.to_long("BLVD"), Some("BOULEVARD"));
 
-        let common = tables.get("suffix_common").unwrap();
-        assert_eq!(common.groups.len(), 2);
-        assert_eq!(common.to_long("AVE"), Some("AVENUE"));
-        assert_eq!(common.to_long("BLVD"), Some("BOULEVARD"));
-        assert_eq!(common.standardize("STRA"), None);
+        // Tag filtering works
+        let common_groups = suffix.groups_with_tag("common");
+        assert_eq!(common_groups.len(), 2);
 
-        // Source groups preserve tags
-        assert_eq!(source_groups.len(), 3);
-        assert_eq!(source_groups[0].tags, vec!["common"]);
-        assert!(source_groups[1].tags.is_empty());
-        assert_eq!(source_groups[2].tags, vec!["common"]);
+        let common_values = suffix.all_values_with_tag("common");
+        assert!(common_values.contains(&"AVENUE"));
+        assert!(common_values.contains(&"BOULEVARD"));
+        assert!(!common_values.contains(&"STRAVENUE"));
+
+        // Tags preserved on groups
+        assert_eq!(suffix.groups[0].tags, vec!["common"]);
+        assert!(suffix.groups[1].tags.is_empty());
+        assert_eq!(suffix.groups[2].tags, vec!["common"]);
     }
 
 }

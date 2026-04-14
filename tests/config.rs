@@ -22,10 +22,7 @@ disabled = ["suffix_common", "suffix_all"]
 fn test_config_adds_custom_suffix() {
     let config: Config = toml::from_str(
         r#"
-[dictionaries.suffix_all]
-add = [{ short = "PSGE", long = "PASSAGE" }]
-
-[dictionaries.suffix_common]
+[dictionaries.suffix]
 add = [{ short = "PSGE", long = "PASSAGE" }]
 "#,
     )

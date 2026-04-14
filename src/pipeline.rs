@@ -223,10 +223,7 @@ pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
     #[test]
     fn test_config_dict_override() {
         let toml_str = r#"
-[dictionaries.suffix_all]
-add = [{ short = "PSGE", long = "PASSAGE" }]
-
-[dictionaries.suffix_common]
+[dictionaries.suffix]
 add = [{ short = "PSGE", long = "PASSAGE" }]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();

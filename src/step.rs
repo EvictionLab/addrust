@@ -34,16 +34,34 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
             continue;
         }
 
-        let (table_name, accessor) = if let Some(idx) = placeholder.find('$') {
+        // Parse placeholder: "table_name", "table_name$accessor",
+        // "table_name:tag", "table_name:tag$accessor"
+        let (table_and_tag, accessor) = if let Some(idx) = placeholder.find('$') {
             (&placeholder[..idx], Some(&placeholder[idx + 1..]))
         } else {
             (placeholder.as_str(), None)
         };
 
+        let (table_name, tag_filter) = if let Some(idx) = table_and_tag.find(':') {
+            (&table_and_tag[..idx], Some(&table_and_tag[idx + 1..]))
+        } else {
+            (table_and_tag, None)
+        };
+
         if let Some(table) = abbr.get(table_name) {
-            let values = match accessor {
-                Some("short") => table.short_values().join("|"),
-                _ => table.bounded_regex(),
+            let values = match (tag_filter, accessor) {
+                (Some(tag), Some("short")) => {
+                    // short values filtered by tag
+                    let groups = table.groups_with_tag(tag);
+                    let mut vals: Vec<&str> = groups.iter().map(|g| g.short.as_str()).collect();
+                    vals.sort_unstable();
+                    vals.dedup();
+                    vals.sort_by_key(|b| std::cmp::Reverse(b.len()));
+                    vals.join("|")
+                }
+                (Some(tag), _) => table.bounded_regex_with_tag(tag),
+                (None, Some("short")) => table.short_values().join("|"),
+                (None, _) => table.bounded_regex(),
             };
             let before = &result[..start];
             let after = &result[end + 1..];
@@ -614,7 +632,7 @@ table = "street_name"
         let def = StepDef {
             step_type: "rewrite".to_string(),
             label: "std_suffix".to_string(),
-            table: Some("suffix_all".to_string()),
+            table: Some("suffix".to_string()),
             output_col: Some(OutputCol::Single("suffix".to_string())),
             input_col: Some("suffix".to_string()),
             ..Default::default()

@@ -183,6 +183,8 @@ pub struct DictEntry {
     pub variants: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 impl Config {
@@ -244,7 +246,7 @@ mod tests {
         config.steps.step_overrides.insert(
             "suffix_common".to_string(),
             StepOverride {
-                pattern: Some(r"(?<!^)\b({suffix_common})\s*$".to_string()),
+                pattern: Some(r"(?<!^)\b({suffix:common})\s*$".to_string()),
                 ..Default::default()
             },
         );
