@@ -571,9 +571,9 @@ mod tests {
         let toml_str = r#"
 [[step]]
 type = "rewrite"
-label = "street_name_abbr"
-pattern = '\b({street_name_abbr$short})\b'
-table = "street_name_abbr"
+label = "street_name"
+pattern = '\b({street_name$short})\b'
+table = "street_name"
 "#;
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
         let steps = compile_steps(&defs.step, &abbr);

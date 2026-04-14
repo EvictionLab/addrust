@@ -82,10 +82,10 @@ fn test_default_pipeline_matches_no_config() {
 }
 
 #[test]
-fn test_config_adds_street_name_abbr() {
+fn test_config_adds_street_name() {
     let config: Config = toml::from_str(
         r#"
-[dictionaries.street_name_abbr]
+[dictionaries.street_name]
 add = [{ short = "PT", long = "POINT" }]
 "#,
     )

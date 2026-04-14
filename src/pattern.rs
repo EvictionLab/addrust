@@ -321,10 +321,10 @@ mod tests {
 
     #[test]
     fn test_parse_table_ref_with_accessor() {
-        let segments = parse_pattern(r"\b({street_name_abbr$short})\b");
+        let segments = parse_pattern(r"\b({street_name$short})\b");
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0], PatternSegment::Literal(r"\b(".to_string()));
-        assert_eq!(segments[1], PatternSegment::TableRef("street_name_abbr$short".to_string()));
+        assert_eq!(segments[1], PatternSegment::TableRef("street_name$short".to_string()));
         assert_eq!(segments[2], PatternSegment::Literal(r")\b".to_string()));
     }
 

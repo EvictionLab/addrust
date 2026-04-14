@@ -467,9 +467,9 @@ mod tests {
     }
 
     #[test]
-    fn test_street_name_abbr_table_exists() {
+    fn test_street_name_table_exists() {
         let tables = load_default_tables();
-        let sna = tables.get("street_name_abbr").unwrap();
+        let sna = tables.get("street_name").unwrap();
         assert!(!sna.is_value_list());
         assert_eq!(sna.to_long("MT"), Some("MOUNT"));
         assert_eq!(sna.to_long("FT"), Some("FORT"));

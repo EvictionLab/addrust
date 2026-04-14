@@ -119,7 +119,7 @@ groups = [
   { short = "NO ADDRESS", long = "", variants = [] },
 ]
 
-[street_name_abbr]
+[street_name]
 groups = [
   { short = "MT",  long = "MOUNT", variants = [] },
   { short = "FT",  long = "FORT",  variants = [] },
