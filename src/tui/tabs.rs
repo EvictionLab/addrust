@@ -576,6 +576,11 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     };
 
+    let has_tags = {
+        let entries = app.current_dict_entries();
+        entries.iter().any(|e| !e.tags.is_empty())
+    };
+
     // Build table rows from entries
     let rows: Vec<Row> = {
         let entries = app.current_dict_entries();
@@ -598,7 +603,26 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     e.variants.join(", ")
                 };
-                if is_value_list {
+                if has_tags {
+                    let tags_str = e.tags.join(", ");
+                    if is_value_list {
+                        Row::new(vec![
+                            check,
+                            Cell::from(e.short.clone()).style(style),
+                            Cell::from("".to_string()),
+                            Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
+                            Cell::from(tags_str).style(Style::new().fg(Color::Cyan)),
+                        ])
+                    } else {
+                        Row::new(vec![
+                            check,
+                            Cell::from(e.short.clone()).style(style),
+                            Cell::from(e.long.clone()).style(style),
+                            Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
+                            Cell::from(tags_str).style(Style::new().fg(Color::Cyan)),
+                        ])
+                    }
+                } else if is_value_list {
                     Row::new(vec![
                         check,
                         Cell::from(e.short.clone()).style(style),
@@ -619,19 +643,39 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let table_name = &app.table_names[app.dict_tab_index];
 
-    let widths = [
-        Constraint::Length(1),    // check
-        Constraint::Length(12),   // short
-        Constraint::Length(20),   // long
-        Constraint::Fill(1),      // variants
-    ];
-
-    let header = Row::new(vec![
-        Cell::from(""),
-        Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
-        Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
-        Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
-    ]).style(Style::new().fg(Color::Cyan));
+    let (widths, header) = if has_tags {
+        (
+            vec![
+                Constraint::Length(1),    // check
+                Constraint::Length(12),   // short
+                Constraint::Length(20),   // long
+                Constraint::Fill(1),      // variants
+                Constraint::Length(12),   // tags
+            ],
+            Row::new(vec![
+                Cell::from(""),
+                Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
+                Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
+                Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
+                Cell::from("Tags").style(Style::new().add_modifier(Modifier::BOLD)),
+            ]).style(Style::new().fg(Color::Cyan)),
+        )
+    } else {
+        (
+            vec![
+                Constraint::Length(1),    // check
+                Constraint::Length(12),   // short
+                Constraint::Length(20),   // long
+                Constraint::Fill(1),      // variants
+            ],
+            Row::new(vec![
+                Cell::from(""),
+                Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
+                Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
+                Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
+            ]).style(Style::new().fg(Color::Cyan)),
+        )
+    };
 
     let table_widget = Table::new(rows, widths)
         .block(Block::bordered().title(format!("{} entries", table_name)))
