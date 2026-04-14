@@ -1,6 +1,5 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::LazyLock;
 
 /// A group of abbreviation variants with one canonical short/long pair.
 /// Short and long are always stored uppercase. Variants are stored as-is
@@ -338,203 +337,6 @@ impl Abbreviations {
     }
 }
 
-// --- Static data definitions ---
-
-fn build_directions() -> AbbrTable {
-    AbbrTable::from_groups(vec![
-        AbbrGroup::new("NE", "NORTHEAST", vec![]),
-        AbbrGroup::new("NW", "NORTHWEST", vec![]),
-        AbbrGroup::new("SE", "SOUTHEAST", vec![]),
-        AbbrGroup::new("SW", "SOUTHWEST", vec![]),
-        AbbrGroup::new("N", "NORTH", vec![]),
-        AbbrGroup::new("S", "SOUTH", vec![]),
-        AbbrGroup::new("E", "EAST", vec![]),
-        AbbrGroup::new("W", "WEST", vec![]),
-    ])
-}
-
-fn build_unit_types() -> AbbrTable {
-    AbbrTable::from_groups(vec![
-        AbbrGroup::new("APT", "APARTMENT", vec![]),
-        AbbrGroup::new("UNIT", "UNIT", vec![]),
-        AbbrGroup::new("STE", "SUITE", vec![]),
-        AbbrGroup::new("FL", "FLOOR", vec![]),
-        AbbrGroup::new("FLT", "FLAT", vec![]),
-        AbbrGroup::new("RM", "ROOM", vec![]),
-        AbbrGroup::new("PH", "PENTHOUSE", vec![]),
-        AbbrGroup::new("TOWNHOUSE", "TOWNHOUSE", vec![]),
-        AbbrGroup::new("DEPT", "DEPARTMENT", vec![]),
-        AbbrGroup::new("DUPLEX", "DUPLEX", vec![]),
-        AbbrGroup::new("ATTIC", "ATTIC", vec![]),
-        AbbrGroup::new("BSMT", "BASEMENT", vec![]),
-        AbbrGroup::new("LOT", "LOT", vec![]),
-        AbbrGroup::new("LVL", "LEVEL", vec![]),
-        AbbrGroup::new("OFC", "OFFICE", vec![]),
-        AbbrGroup::new("NUM", "NUMBER", vec!["NO".into()]),
-        AbbrGroup::new("HSE", "HOUSE", vec![]),
-        AbbrGroup::new("GARAGE", "GARAGE", vec![]),
-        AbbrGroup::new("CONDO", "CONDO", vec![]),
-        AbbrGroup::new("TRLR", "TRAILER", vec![]),
-        AbbrGroup::new("#", "#", vec![]),
-    ])
-}
-
-fn build_unit_locations() -> AbbrTable {
-    AbbrTable::from_groups(vec![
-        AbbrGroup::new("UPPR", "UPPER", vec!["UP".into()]),
-        AbbrGroup::new("LOWR", "LOWER", vec!["LWR".into(), "LW".into()]),
-        AbbrGroup::new("FRNT", "FRONT", vec!["FRT".into()]),
-        AbbrGroup::new("REAR", "REAR", vec![]),
-        AbbrGroup::new("BACK", "BACK", vec![]),
-        AbbrGroup::new("MID", "MIDDLE", vec![]),
-        AbbrGroup::new("ENTIRE", "ENTIRE", vec![]),
-        AbbrGroup::new("WHOLE", "WHOLE", vec![]),
-        AbbrGroup::new("SINGLE", "SINGLE", vec![]),
-        AbbrGroup::new("DOWN", "DOWN", vec![]),
-        AbbrGroup::new("RIGHT", "RIGHT", vec![]),
-        AbbrGroup::new("LEFT", "LEFT", vec![]),
-        AbbrGroup::new("DOWNSTAIRS", "DOWNSTAIRS", vec![]),
-        AbbrGroup::new("UPSTAIRS", "UPSTAIRS", vec![]),
-        AbbrGroup::new("SIDE", "SIDE", vec![]),
-    ])
-}
-
-fn build_states() -> AbbrTable {
-    AbbrTable::from_pairs(vec![
-        ("AL", "ALABAMA"), ("AK", "ALASKA"), ("AZ", "ARIZONA"),
-        ("AR", "ARKANSAS"), ("CA", "CALIFORNIA"), ("CO", "COLORADO"),
-        ("CT", "CONNECTICUT"), ("DE", "DELAWARE"), ("FL", "FLORIDA"),
-        ("GA", "GEORGIA"), ("HI", "HAWAII"), ("ID", "IDAHO"),
-        ("IL", "ILLINOIS"), ("IN", "INDIANA"), ("IA", "IOWA"),
-        ("KS", "KANSAS"), ("KY", "KENTUCKY"), ("LA", "LOUISIANA"),
-        ("ME", "MAINE"), ("MD", "MARYLAND"), ("MA", "MASSACHUSETTS"),
-        ("MI", "MICHIGAN"), ("MN", "MINNESOTA"), ("MS", "MISSISSIPPI"),
-        ("MO", "MISSOURI"), ("MT", "MONTANA"), ("NE", "NEBRASKA"),
-        ("NV", "NEVADA"), ("NH", "NEW HAMPSHIRE"), ("NJ", "NEW JERSEY"),
-        ("NM", "NEW MEXICO"), ("NY", "NEW YORK"), ("NC", "NORTH CAROLINA"),
-        ("ND", "NORTH DAKOTA"), ("OH", "OHIO"), ("OK", "OKLAHOMA"),
-        ("OR", "OREGON"), ("PA", "PENNSYLVANIA"), ("RI", "RHODE ISLAND"),
-        ("SC", "SOUTH CAROLINA"), ("SD", "SOUTH DAKOTA"), ("TN", "TENNESSEE"),
-        ("TX", "TEXAS"), ("UT", "UTAH"), ("VT", "VERMONT"),
-        ("VA", "VIRGINIA"), ("WA", "WASHINGTON"), ("WV", "WEST VIRGINIA"),
-        ("WI", "WISCONSIN"), ("WY", "WYOMING"), ("DC", "DISTRICT OF COLUMBIA"),
-    ])
-}
-
-fn build_all_suffixes() -> AbbrTable {
-    let csv_data = include_str!("../../data/usps-street-suffix.csv");
-    let mut groups: Vec<AbbrGroup> = Vec::new();
-    let mut usps_to_idx: HashMap<String, usize> = HashMap::new();
-
-    for line in csv_data.lines().skip(1) {
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() < 3 { continue; }
-        let primary = cols[0].trim().to_string();
-        let variant = cols[1].trim().to_string();
-        let usps = cols[2].trim().to_string();
-
-        if usps == "TRAILER" || usps == "HIGHWAY" { continue; }
-
-        // Handle plural forms
-        let canonical_short = if ["PARK", "WALK", "SPUR", "LOOP"].contains(&usps.as_str())
-            && ["PARKS", "WALKS", "SPURS", "LOOPS"].contains(&primary.as_str())
-        {
-            format!("{}S", usps)
-        } else {
-            usps.clone()
-        };
-
-        if let Some(&idx) = usps_to_idx.get(&canonical_short) {
-            let group = &mut groups[idx];
-            // Add variant if it differs from canonical short and long and not already present
-            if variant != group.short && variant != group.long
-                && !group.variants.contains(&variant)
-            {
-                group.variants.push(variant.clone());
-            }
-            // Also add the primary long form as variant if it differs
-            if primary != group.short && primary != group.long
-                && !group.variants.contains(&primary)
-            {
-                group.variants.push(primary);
-            }
-        } else {
-            let idx = groups.len();
-            let mut variants = vec![];
-            if variant != canonical_short && variant != primary {
-                variants.push(variant);
-            }
-            groups.push(AbbrGroup::new(canonical_short.clone(), primary, variants));
-            usps_to_idx.insert(canonical_short, idx);
-        }
-    }
-
-    // Add manual overrides from R package's abbr_more_suffix
-    let manual_variants: &[(&str, &[&str])] = &[
-        ("BLVD", &["BVD", "BV", "BLV", "BL"]),
-        ("CIR", &["CI"]),
-        ("CT", &["CRT"]),
-        ("EXPY", &["EX", "EXPWY"]),
-        ("IS", &["ISLD"]),
-        ("LN", &["LA"]),
-        ("PKWY", &["PY", "PARK WAY", "PKW"]),
-        ("TER", &["TE"]),
-        ("TRCE", &["TR"]),
-        ("PARK", &["PK"]),
-        ("PL", &["PLC"]),
-        ("AVE", &["AE"]),
-        ("DR", &["DIRVE"]),
-    ];
-    for (usps_short, extras) in manual_variants {
-        if let Some(&idx) = usps_to_idx.get(*usps_short) {
-            for extra in *extras {
-                let e = extra.to_string();
-                let group = &mut groups[idx];
-                if e != group.short && e != group.long && !group.variants.contains(&e) {
-                    group.variants.push(e);
-                }
-            }
-        }
-    }
-
-    AbbrTable::from_groups(groups)
-}
-
-fn build_na_values() -> AbbrTable {
-    AbbrTable::from_pairs(vec![
-        ("NULL", ""), ("NAN", ""), ("MISSING", ""), ("NONE", ""),
-        ("UNKNOWN", ""), ("NO ADDRESS", ""),
-    ])
-}
-
-fn build_street_name_abbr() -> AbbrTable {
-    AbbrTable::from_groups(vec![
-        AbbrGroup::new("MT", "MOUNT", vec![]),
-        AbbrGroup::new("FT", "FORT", vec![]),
-        AbbrGroup::new("MLK", "MARTIN LUTHER KING", vec![
-            r"(?:(?:DR|DOCTOR)\W*)?M(?:ARTIN)?\W*L(?:UTHER)?\W*K(?:ING)?(?:\W+(?:JR|JUNIOR))?".into(),
-        ]),
-    ])
-}
-
-fn build_common_suffixes() -> AbbrTable {
-    AbbrTable::from_groups(vec![
-        AbbrGroup::new("DR", "DRIVE", vec![]),
-        AbbrGroup::new("LN", "LANE", vec![]),
-        AbbrGroup::new("AVE", "AVENUE", vec![]),
-        AbbrGroup::new("RD", "ROAD", vec![]),
-        AbbrGroup::new("ST", "STREET", vec![]),
-        AbbrGroup::new("CIR", "CIRCLE", vec![]),
-        AbbrGroup::new("CT", "COURT", vec![]),
-        AbbrGroup::new("PL", "PLACE", vec![]),
-        AbbrGroup::new("WAY", "WAY", vec![]),
-        AbbrGroup::new("BLVD", "BOULEVARD", vec![]),
-        AbbrGroup::new("STRA", "STRAVENUE", vec![]),
-        AbbrGroup::new("CV", "COVE", vec![]),
-        AbbrGroup::new("LOOP", "LOOP", vec![]),
-    ])
-}
-
 // --- TOML deserialization structs ---
 
 #[derive(Deserialize)]
@@ -612,23 +414,17 @@ pub fn load_suffixes_from_toml(toml_str: &str) -> HashMap<String, AbbrTable> {
 
 /// Build the default abbreviation tables (non-static, for patching).
 pub fn build_default_tables() -> Abbreviations {
-    let mut tables = HashMap::new();
-    tables.insert("direction".to_string(), build_directions());
-    tables.insert("unit_type".to_string(), build_unit_types());
-    tables.insert("unit_location".to_string(), build_unit_locations());
-    tables.insert("state".to_string(), build_states());
-    tables.insert("suffix_all".to_string(), build_all_suffixes());
-    tables.insert("suffix_common".to_string(), build_common_suffixes());
-    tables.insert("na_values".to_string(), build_na_values());
-    tables.insert("street_name_abbr".to_string(), build_street_name_abbr());
+    let mut tables = load_tables_from_toml(
+        include_str!("../../data/defaults/tables.toml")
+    );
+    tables.extend(load_suffixes_from_toml(
+        include_str!("../../data/defaults/suffixes.toml")
+    ));
     let (number_cardinal, number_ordinal) = crate::tables::numbers::build_number_tables();
     tables.insert("number_cardinal".to_string(), number_cardinal);
     tables.insert("number_ordinal".to_string(), number_ordinal);
     Abbreviations { tables }
 }
-
-/// Global abbreviation tables, built once.
-pub static ABBR: LazyLock<Abbreviations> = LazyLock::new(build_default_tables);
 
 #[cfg(test)]
 mod tests {
@@ -950,45 +746,4 @@ groups = [
         assert_eq!(common.standardize("STRA"), None);
     }
 
-    #[test]
-    fn test_toml_tables_match_build_functions() {
-        let old_tables = build_default_tables();
-
-        let mut new_tables_map = load_tables_from_toml(
-            include_str!("../../data/defaults/tables.toml")
-        );
-        new_tables_map.extend(load_suffixes_from_toml(
-            include_str!("../../data/defaults/suffixes.toml")
-        ));
-
-        // Check each non-number table
-        for name in &[
-            "direction", "unit_type", "unit_location", "state",
-            "na_values", "street_name_abbr", "suffix_all", "suffix_common",
-        ] {
-            let old = old_tables.get(name)
-                .unwrap_or_else(|| panic!("Old tables missing: {}", name));
-            let new = new_tables_map.get(*name)
-                .unwrap_or_else(|| panic!("New tables missing: {}", name));
-
-            // Same number of groups
-            assert_eq!(
-                old.groups.len(), new.groups.len(),
-                "Group count mismatch for {}: old={}, new={}",
-                name, old.groups.len(), new.groups.len()
-            );
-
-            // Same standardize results for every value in old table
-            for val in old.all_match_values() {
-                let old_result = old.standardize(val);
-                let new_result = new.standardize(val);
-                assert_eq!(
-                    old_result.map(|(_, s, l)| (s, l)),
-                    new_result.map(|(_, s, l)| (s, l)),
-                    "Standardize mismatch for '{}' in table '{}': old={:?}, new={:?}",
-                    val, name, old_result, new_result
-                );
-            }
-        }
-    }
 }
