@@ -163,7 +163,7 @@ impl App {
                 if name == "suffix" {
                     let source_groups = default_tables.suffix_source()
                         .expect("suffix_source should be available");
-                    let overrides = config.dictionaries.get("suffix");
+                    let overrides = config.dictionaries.get("suffix_all");
 
                     let mut entries: Vec<DictGroupState> = source_groups
                         .iter()
@@ -462,7 +462,13 @@ impl App {
                 || !overrides.remove.is_empty()
                 || !overrides.override_entries.is_empty()
             {
-                config.dictionaries.insert(name.clone(), overrides);
+                // Map TUI's unified "suffix" table to the pipeline's "suffix_all" config key
+                let config_key = if name == "suffix" {
+                    "suffix_all".to_string()
+                } else {
+                    name.clone()
+                };
+                config.dictionaries.insert(config_key, overrides);
             }
         }
 
