@@ -29,10 +29,10 @@ echo "123 N Main St Apt 4, Springfield IL 62704" | addrust parse --format full
 
 ### DuckDB
 
-Most common workflow — parse addresses directly from a DuckDB table. Requires building with the `duckdb` feature:
+Most common workflow — parse addresses directly from a DuckDB table:
 
 ```sh
-cargo install --path . --features duckdb
+cargo install --path .
 ```
 
 ```sh

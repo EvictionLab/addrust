@@ -19,6 +19,7 @@ crossterm = "0.28"
 duckdb = { version = "1.4", optional = true, features = ["bundled"] }
 
 [features]
+default = ["duckdb"]
 duckdb = ["dep:duckdb"]
 
 [[bin]]
