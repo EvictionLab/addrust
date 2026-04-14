@@ -949,4 +949,46 @@ groups = [
         assert_eq!(common.to_long("BLVD"), Some("BOULEVARD"));
         assert_eq!(common.standardize("STRA"), None);
     }
+
+    #[test]
+    fn test_toml_tables_match_build_functions() {
+        let old_tables = build_default_tables();
+
+        let mut new_tables_map = load_tables_from_toml(
+            include_str!("../../data/defaults/tables.toml")
+        );
+        new_tables_map.extend(load_suffixes_from_toml(
+            include_str!("../../data/defaults/suffixes.toml")
+        ));
+
+        // Check each non-number table
+        for name in &[
+            "direction", "unit_type", "unit_location", "state",
+            "na_values", "street_name_abbr", "suffix_all", "suffix_common",
+        ] {
+            let old = old_tables.get(name)
+                .unwrap_or_else(|| panic!("Old tables missing: {}", name));
+            let new = new_tables_map.get(*name)
+                .unwrap_or_else(|| panic!("New tables missing: {}", name));
+
+            // Same number of groups
+            assert_eq!(
+                old.groups.len(), new.groups.len(),
+                "Group count mismatch for {}: old={}, new={}",
+                name, old.groups.len(), new.groups.len()
+            );
+
+            // Same standardize results for every value in old table
+            for val in old.all_match_values() {
+                let old_result = old.standardize(val);
+                let new_result = new.standardize(val);
+                assert_eq!(
+                    old_result.map(|(_, s, l)| (s, l)),
+                    new_result.map(|(_, s, l)| (s, l)),
+                    "Standardize mismatch for '{}' in table '{}': old={:?}, new={:?}",
+                    val, name, old_result, new_result
+                );
+            }
+        }
+    }
 }
