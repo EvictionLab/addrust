@@ -16,11 +16,11 @@ pub fn generate_default_config() -> String {
     out.push_str("# Available steps (in pipeline order):\n");
 
     let pipeline = Pipeline::default();
-    for step in pipeline.step_summaries() {
-        let template = step.pattern_template.as_deref().unwrap_or("");
+    for step in pipeline.steps() {
+        let template = step.pattern_template().unwrap_or("");
         out.push_str(&format!(
             "#   {:30} (type: {})\n",
-            step.label, step.step_type
+            step.label(), step.step_type()
         ));
         if !template.is_empty() {
             out.push_str(&format!("#     pattern: {}\n", template));

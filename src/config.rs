@@ -39,17 +39,57 @@ impl Default for OutputConfig {
     }
 }
 
+/// Static metadata for each output component.
+pub struct OutputFieldMeta {
+    pub key: &'static str,
+    pub default: OutputFormat,
+    pub example_short: &'static str,
+    pub example_long: &'static str,
+}
+
+pub const OUTPUT_FIELDS: &[OutputFieldMeta] = &[
+    OutputFieldMeta { key: "suffix", default: OutputFormat::Long, example_short: "DR", example_long: "DRIVE" },
+    OutputFieldMeta { key: "direction", default: OutputFormat::Short, example_short: "N", example_long: "NORTH" },
+    OutputFieldMeta { key: "unit_type", default: OutputFormat::Long, example_short: "APT", example_long: "APARTMENT" },
+    OutputFieldMeta { key: "unit_location", default: OutputFormat::Long, example_short: "UPPR", example_long: "UPPER" },
+    OutputFieldMeta { key: "state", default: OutputFormat::Short, example_short: "NY", example_long: "NEW YORK" },
+];
+
 impl OutputConfig {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
-    pub fn format_for_field(&self, field: crate::address::Field) -> OutputFormat {
-        use crate::address::Field;
-        match field {
-            Field::Suffix => self.suffix,
-            Field::PreDirection | Field::PostDirection => self.direction,
-            Field::Unit => self.unit_location,
+    pub fn get(&self, key: &str) -> OutputFormat {
+        match key {
+            "suffix" => self.suffix,
+            "direction" => self.direction,
+            "unit_type" => self.unit_type,
+            "unit_location" => self.unit_location,
+            "state" => self.state,
+            _ => OutputFormat::Long,
+        }
+    }
+
+    pub fn set(&mut self, key: &str, format: OutputFormat) {
+        match key {
+            "suffix" => self.suffix = format,
+            "direction" => self.direction = format,
+            "unit_type" => self.unit_type = format,
+            "unit_location" => self.unit_location = format,
+            "state" => self.state = format,
+            _ => {}
+        }
+    }
+
+    pub fn format_for_field(&self, col: crate::address::Col) -> OutputFormat {
+        use crate::address::Col;
+        match col {
+            Col::Suffix => self.suffix,
+            Col::PreDirection | Col::PostDirection => self.direction,
+            Col::Unit => self.unit_location,
+            Col::UnitType => self.unit_type,
+            Col::State => self.state,
             _ => OutputFormat::Long,
         }
     }
@@ -60,11 +100,46 @@ fn is_short(f: &OutputFormat) -> bool { *f == OutputFormat::Short }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
+pub struct StepOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_col: Option<crate::step::OutputCol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_if_filled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_col: Option<String>,
+}
+
+impl StepOverride {
+    /// Apply this override to a StepDef, replacing only the fields that are Some.
+    pub fn apply_to(&self, def: &mut crate::step::StepDef) {
+        if let Some(ref l) = self.label { def.label = l.clone(); }
+        if let Some(ref p) = self.pattern { def.pattern = Some(p.clone()); }
+        if let Some(ref t) = self.table { def.table = Some(t.clone()); }
+        if let Some(ref o) = self.output_col { def.output_col = Some(o.clone()); }
+        if let Some(ref r) = self.replacement { def.replacement = Some(r.clone()); }
+        if let Some(s) = self.skip_if_filled { def.skip_if_filled = Some(s); }
+        if let Some(ref m) = self.mode { def.mode = Some(m.clone()); }
+        if let Some(ref s) = self.input_col { def.input_col = Some(s.clone()); }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct StepsConfig {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<String>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub pattern_overrides: HashMap<String, String>,
+    pub step_overrides: HashMap<String, StepOverride>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub step_order: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -74,7 +149,7 @@ pub struct StepsConfig {
 impl StepsConfig {
     pub fn is_empty(&self) -> bool {
         self.disabled.is_empty()
-            && self.pattern_overrides.is_empty()
+            && self.step_overrides.is_empty()
             && self.step_order.is_empty()
             && self.custom_steps.is_empty()
     }
@@ -158,7 +233,7 @@ mod tests {
         let toml_str = config.to_toml();
         assert_eq!(toml_str.trim(), "");
         assert!(!toml_str.contains("[output]"));
-        assert!(!toml_str.contains("pattern_overrides"));
+        assert!(!toml_str.contains("step_overrides"));
     }
 
     #[test]
@@ -171,9 +246,12 @@ mod tests {
     fn test_roundtrip_full_config() {
         let mut config = Config::default();
         config.steps.disabled = vec!["po_box".to_string()];
-        config.steps.pattern_overrides.insert(
+        config.steps.step_overrides.insert(
             "suffix_common".to_string(),
-            r"(?<!^)\b({suffix_common})\s*$".to_string(),
+            StepOverride {
+                pattern: Some(r"(?<!^)\b({suffix_common})\s*$".to_string()),
+                ..Default::default()
+            },
         );
         config.dictionaries.insert("unit_type".to_string(), DictOverrides {
             add: vec![DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() }],
@@ -185,7 +263,7 @@ mod tests {
 
         let toml_str = config.to_toml();
         assert!(toml_str.contains("[steps]"));
-        assert!(toml_str.contains("[steps.pattern_overrides]"));
+        assert!(toml_str.contains("[steps.step_overrides.suffix_common]"));
         assert!(toml_str.contains("[output]"));
         // Non-default output fields serialized, defaults omitted
         assert!(toml_str.contains("suffix"));
@@ -193,7 +271,7 @@ mod tests {
 
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.steps.disabled, vec!["po_box"]);
-        assert!(parsed.steps.pattern_overrides.contains_key("suffix_common"));
+        assert!(parsed.steps.step_overrides.contains_key("suffix_common"));
         assert_eq!(parsed.output.suffix, OutputFormat::Short);
         assert_eq!(parsed.output.direction, OutputFormat::Long);
         assert_eq!(parsed.output.unit_type, OutputFormat::Long); // default preserved
@@ -261,9 +339,7 @@ skip_if_filled = true
         sc.custom_steps = vec![crate::step::StepDef {
             step_type: "rewrite".to_string(),
             label: "test".to_string(),
-            pattern: None, table: None, target: None, replacement: None, source: None,
-            skip_if_filled: None, matching_table: None, format_table: None, mode: None,
-            targets: None,
+            ..Default::default()
         }];
         assert!(!sc.is_empty());
     }

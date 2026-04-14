@@ -209,7 +209,7 @@ step_order = ["na_check", "city_state_zip", "po_box", "custom_po_box_digits"]
 type = "extract"
 label = "custom_po_box_digits"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#,
     )
@@ -235,10 +235,10 @@ replacement = 'TESTED'
     )
     .unwrap();
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    assert_eq!(summaries[0].label, "na_check");
-    assert_eq!(summaries[1].label, "custom_rewrite_test");
-    assert_eq!(summaries[2].label, "city_state_zip");
+    let summaries = p.steps();
+    assert_eq!(summaries[0].label(), "na_check");
+    assert_eq!(summaries[1].label(), "custom_rewrite_test");
+    assert_eq!(summaries[2].label(), "city_state_zip");
 }
 
 #[test]
@@ -252,15 +252,15 @@ disabled = ["custom_po_box_digits"]
 type = "extract"
 label = "custom_po_box_digits"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#,
     )
     .unwrap();
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    let custom = summaries.iter().find(|s| s.label == "custom_po_box_digits").unwrap();
-    assert!(!custom.enabled);
+    let summaries = p.steps();
+    let custom = summaries.iter().find(|s| s.label() == "custom_po_box_digits").unwrap();
+    assert!(!custom.enabled());
 }
 
 #[test]
@@ -291,7 +291,7 @@ step_order = ["na_check", "custom_box", "po_box"]
 type = "extract"
 label = "custom_box"
 pattern = '\bBOX (\d+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 "#;
     let config: Config = toml::from_str(toml_str).unwrap();
@@ -373,14 +373,14 @@ fn test_invalid_custom_step_skipped_gracefully() {
 type = "extract"
 label = "bad_step"
 pattern = '(?P<unclosed'
-target = "po_box"
+output_col = "po_box"
 "#,
     )
     .unwrap();
     // Should not panic — invalid step is skipped with warning
     let p = Pipeline::from_config(&config);
-    let summaries = p.step_summaries();
-    assert!(!summaries.iter().any(|s| s.label == "bad_step"));
+    let summaries = p.steps();
+    assert!(!summaries.iter().any(|s| s.label() == "bad_step"));
     // Default steps still work
     let addr = p.parse("123 Main St");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
@@ -443,13 +443,60 @@ fn test_ordinal_street() {
 
 #[test]
 fn test_source_rewrite_no_side_effects() {
-    // "#007" → hash stripped → "007" → leading zeros stripped → "7"
-    // Unit type is None (bare # unit has no keyword like APT)
+    // "#007" → # captured into unit_type, "007" → leading zeros stripped → "7"
     let p = Pipeline::default();
     let addr = p.parse("123 Main St #007");
     assert_eq!(addr.street_number.as_deref(), Some("123"));
     assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
     assert_eq!(addr.unit.as_deref(), Some("7"));
-    assert!(addr.unit_type.is_none());
+    assert_eq!(addr.unit_type.as_deref(), Some("#"));
 }
+
+#[test]
+fn test_step_overrides_deserialize() {
+    let config: Config = toml::from_str(
+        r#"
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+skip_if_filled = false
+
+[steps.step_overrides.unit_type_value]
+output_col = "unit"
+"#,
+    )
+    .unwrap();
+    assert_eq!(config.steps.step_overrides.len(), 2);
+    let po_box = &config.steps.step_overrides["po_box"];
+    assert_eq!(po_box.pattern.as_deref(), Some(r"\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b"));
+    assert_eq!(po_box.skip_if_filled, Some(false));
+    let utv = &config.steps.step_overrides["unit_type_value"];
+    assert!(matches!(&utv.output_col, Some(addrust::step::OutputCol::Single(s)) if s == "unit"));
+    assert!(utv.pattern.is_none());
+}
+
+#[test]
+fn test_step_overrides_applied_in_pipeline() {
+    let config: Config = toml::from_str(
+        r#"
+[steps.step_overrides.po_box]
+pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+(?:-\d)?)\b'
+"#,
+    )
+    .unwrap();
+    let p = Pipeline::from_config(&config);
+    // The dash-digit variant should now be captured
+    let addr = p.parse("PO BOX 123-4");
+    assert_eq!(addr.po_box.as_deref(), Some("PO BOX 123-4"));
+}
+
+#[test]
+fn test_prepare_steps_in_pipeline() {
+    let config = Config::default();
+    let p = Pipeline::from_config(&config);
+    let summaries = p.steps();
+    // First steps should be prepare rules
+    assert_eq!(summaries[0].label(), "fix_ampersand");
+    assert_eq!(summaries[0].step_type(), "rewrite");
+}
+
 

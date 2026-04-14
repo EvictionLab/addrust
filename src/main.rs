@@ -219,10 +219,10 @@ fn main() {
             match what {
                 ListCommands::Steps => {
                     let pipeline = Pipeline::from_config(&config);
-                    for (i, step) in pipeline.step_summaries().iter().enumerate() {
-                        let status = if step.enabled { " " } else { "x" };
-                        let template = step.pattern_template.as_deref().unwrap_or("");
-                        println!("{:>3}. [{}] {:30} {:12} {}", i + 1, status, step.label, step.step_type, template);
+                    for (i, step) in pipeline.steps().iter().enumerate() {
+                        let status = if step.enabled() { " " } else { "x" };
+                        let template = step.pattern_template().unwrap_or("");
+                        println!("{:>3}. [{}] {:30} {:12} {}", i + 1, status, step.label(), step.step_type(), template);
                     }
                 }
                 ListCommands::Tables { name } => {
