@@ -29,8 +29,8 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
 
     while i < chars.len() {
         // Check for table reference {name}
-        if chars[i] == '{' {
-            if let Some(end) = find_table_ref(&chars, i) {
+        if chars[i] == '{'
+            && let Some(end) = find_table_ref(&chars, i) {
                 // Flush literal before this
                 if i > literal_start {
                     segments.push(PatternSegment::Literal(
@@ -43,11 +43,10 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
                 literal_start = i;
                 continue;
             }
-        }
 
         // Check for group (...)
-        if chars[i] == '(' {
-            if let Some(end) = find_matching_paren(&chars, i) {
+        if chars[i] == '('
+            && let Some(end) = find_matching_paren(&chars, i) {
                 let group_text: String = chars[i..=end].iter().collect();
                 let inner = extract_inner(&chars, i, end);
 
@@ -73,7 +72,6 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
                     continue;
                 }
             }
-        }
 
         i += 1;
     }

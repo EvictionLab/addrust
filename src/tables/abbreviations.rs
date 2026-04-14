@@ -113,7 +113,7 @@ impl AbbrTable {
                 }
             }
         }
-        values.sort_by(|a, b| b.len().cmp(&a.len()));
+        values.sort_by_key(|b| std::cmp::Reverse(b.len()));
         values
     }
 
@@ -173,7 +173,7 @@ impl AbbrTable {
             .collect();
         vals.sort_unstable();
         vals.dedup();
-        vals.sort_by(|a, b| b.len().cmp(&a.len()));
+        vals.sort_by_key(|b| std::cmp::Reverse(b.len()));
         vals
     }
 
@@ -276,16 +276,10 @@ fn strip_zero_width_assertions(pattern: &str) -> String {
         }
         // Detect (?=...) (?!...) (?<=...) (?<!...)
         if chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
-            let is_assertion = if chars[i + 2] == '=' || chars[i + 2] == '!' {
-                true
-            } else if chars[i + 2] == '<'
-                && i + 3 < chars.len()
-                && (chars[i + 3] == '=' || chars[i + 3] == '!')
-            {
-                true
-            } else {
-                false
-            };
+            let is_assertion = chars[i + 2] == '=' || chars[i + 2] == '!'
+                || (chars[i + 2] == '<'
+                    && i + 3 < chars.len()
+                    && (chars[i + 3] == '=' || chars[i + 3] == '!'));
             if is_assertion {
                 // Skip the entire assertion group (handle nesting)
                 let mut depth = 1;

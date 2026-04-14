@@ -19,7 +19,7 @@ pub fn extract_remove(source: &mut String, pattern: &Regex) -> Option<Vec<Option
     trim_nonword_boundaries(source);
 
     // Return None if full match was empty
-    if groups[0].as_ref().map_or(true, |s| s.is_empty()) {
+    if groups[0].as_ref().is_none_or(|s| s.is_empty()) {
         None
     } else {
         Some(groups)

@@ -11,7 +11,7 @@ pub fn cursor_line(text: &str, cursor: usize, max_width: usize) -> Line<'static>
     let pos = cursor.min(text.len());
 
     // Compute scroll offset to keep cursor visible
-    let scroll = if max_width == 0 || text.len() + 1 <= max_width {
+    let scroll = if max_width == 0 || text.len() < max_width {
         0
     } else {
         // Keep cursor roughly centered, but clamped

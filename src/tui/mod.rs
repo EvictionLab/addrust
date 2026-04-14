@@ -690,8 +690,8 @@ fn render(frame: &mut Frame, app: &mut App) {
 
 
     // Delete confirmation overlay
-    if let Some(del_idx) = app.confirm_delete {
-        if del_idx < app.steps.len() {
+    if let Some(del_idx) = app.confirm_delete
+        && del_idx < app.steps.len() {
             let label = app.steps[del_idx].label();
             let popup_area = centered_rect(50, 5, frame.area());
             let popup = Paragraph::new(format!("Delete custom step '{}'? (y/n)", label))
@@ -700,7 +700,6 @@ fn render(frame: &mut Frame, app: &mut App) {
             frame.render_widget(ratatui::widgets::Clear, popup_area);
             frame.render_widget(popup, popup_area);
         }
-    }
 }
 
 // ---------------------------------------------------------------------------

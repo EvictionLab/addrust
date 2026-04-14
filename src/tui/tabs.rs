@@ -142,7 +142,7 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
                     step.def.pattern.as_deref().unwrap_or(""));
                 let mut def = step.def.clone();
                 def.step_type = step_type;
-                app.panel = Some(super::panel::PanelKind::Step(super::panel::StepPanelState {
+                app.panel = Some(super::panel::PanelKind::Step(Box::new(super::panel::StepPanelState {
                     step_index: Some(i),
                     def,
                     visible_fields: visible,
@@ -151,7 +151,7 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
                     pattern_segments: segments,
                     is_new: false,
                     show_discard_prompt: false,
-                }));
+                })));
             }
         }
         KeyCode::Char('m') => {
@@ -167,7 +167,7 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
                 ..Default::default()
             };
             let visible = super::panel::visible_fields_for_type("extract");
-            app.panel = Some(super::panel::PanelKind::Step(super::panel::StepPanelState {
+            app.panel = Some(super::panel::PanelKind::Step(Box::new(super::panel::StepPanelState {
                 step_index: None,
                 def,
                 visible_fields: visible,
@@ -176,14 +176,13 @@ pub(crate) fn handle_rules_key(app: &mut App, code: KeyCode) {
                 pattern_segments: Vec::new(),
                 is_new: true,
                 show_discard_prompt: false,
-            }));
+            })));
         }
         KeyCode::Char('d') => {
-            if let Some(i) = app.steps_list_state.selected() {
-                if app.steps[i].is_custom {
+            if let Some(i) = app.steps_list_state.selected()
+                && app.steps[i].is_custom {
                     app.confirm_delete = Some(i);
                 }
-            }
         }
         _ => {}
     }
@@ -341,14 +340,13 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                     }
                     if entry.tags != entry.original_tags {
                         entry.status = GroupStatus::Modified;
-                    } else if entry.status == GroupStatus::Modified {
-                        if entry.short == entry.original_short
+                    } else if entry.status == GroupStatus::Modified
+                        && entry.short == entry.original_short
                             && entry.long == entry.original_long
                             && entry.variants == entry.original_variants
-                        {
+                    {
                             entry.status = GroupStatus::Default;
                         }
-                    }
                     app.dirty = true;
                 }
             }

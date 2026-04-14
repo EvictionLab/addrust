@@ -20,11 +20,8 @@ use crate::tables::Abbreviations;
 pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
     let mut result = template.to_string();
     let mut search_from = 0;
-    loop {
-        let start = match result[search_from..].find('{') {
-            Some(s) => search_from + s,
-            None => break,
-        };
+    while let Some(s) = result[search_from..].find('{') {
+        let start = search_from + s;
         let end = match result[start..].find('}') {
             Some(e) => start + e,
             None => break,
@@ -346,11 +343,10 @@ pub fn apply_step(
                     if targets_map.keys().any(|f| state.fields.field(*f).is_some()) {
                         return;
                     }
-                } else if let Some(target_field) = target {
-                    if state.fields.field(*target_field).is_some() {
+                } else if let Some(target_field) = target
+                    && state.fields.field(*target_field).is_some() {
                         return;
                     }
-                }
             }
             let extract_result = match source {
                 Some(field) => {
@@ -368,11 +364,10 @@ pub fn apply_step(
             if let Some(groups) = extract_result {
                 if let Some(targets_map) = targets {
                     for (field, group_num) in targets_map {
-                        if let Some(Some(val)) = groups.get(*group_num) {
-                            if !val.is_empty() {
+                        if let Some(Some(val)) = groups.get(*group_num)
+                            && !val.is_empty() {
                                 *state.fields.field_mut(*field) = Some(val.clone());
                             }
-                        }
                     }
                 } else if let Some(target_field) = target {
                     let val = if let Some(ref repl) = step.def.replacement {
