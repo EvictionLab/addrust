@@ -181,8 +181,8 @@ impl App {
                         .iter()
                         .map(|g| {
                             let mut status = GroupStatus::Default;
-                            let mut long = g.long.clone();
-                            let mut variants = g.variants.clone();
+                            let long = g.long.clone();
+                            let variants = g.variants.clone();
 
                             if let Some(ov) = overrides {
                                 let is_removed = ov.remove.iter().any(|r| {
@@ -191,13 +191,6 @@ impl App {
                                 });
                                 if is_removed {
                                     status = GroupStatus::Removed;
-                                }
-                                for o in &ov.override_entries {
-                                    if o.short.to_uppercase() == g.short {
-                                        long = o.long.to_uppercase();
-                                        variants = o.variants.clone();
-                                        status = GroupStatus::Modified;
-                                    }
                                 }
                             }
 
@@ -255,8 +248,8 @@ impl App {
                     .iter()
                     .map(|g| {
                         let mut status = GroupStatus::Default;
-                        let mut long = g.long.clone();
-                        let mut variants = g.variants.clone();
+                        let long = g.long.clone();
+                        let variants = g.variants.clone();
 
                         if let Some(ov) = overrides {
                             // Check if removed
@@ -266,15 +259,6 @@ impl App {
                             });
                             if is_removed {
                                 status = GroupStatus::Removed;
-                            }
-
-                            // Check if overridden
-                            for o in &ov.override_entries {
-                                if o.short.to_uppercase() == g.short {
-                                    long = o.long.to_uppercase();
-                                    variants = o.variants.clone();
-                                    status = GroupStatus::Modified;
-                                }
                             }
                         }
 
@@ -471,10 +455,7 @@ impl App {
                 }
             }
 
-            if !overrides.add.is_empty()
-                || !overrides.remove.is_empty()
-                || !overrides.override_entries.is_empty()
-            {
+            if !overrides.add.is_empty() || !overrides.remove.is_empty() {
                 // Map TUI's unified "suffix" table to the pipeline's "suffix_all" config key
                 let config_key = if name == "suffix" {
                     "suffix_all".to_string()

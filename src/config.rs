@@ -173,11 +173,6 @@ pub struct DictOverrides {
     pub add: Vec<DictEntry>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub remove: Vec<String>,
-    /// Deprecated: use `add` with `canonical = true` instead.
-    /// Kept for backward compatibility with existing user config files.
-    /// Treated as `add` entries with `canonical = true` during patch.
-    #[serde(rename = "override", skip_serializing_if = "Vec::is_empty")]
-    pub override_entries: Vec<DictEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq)]
@@ -254,9 +249,11 @@ mod tests {
             },
         );
         config.dictionaries.insert("unit_type".to_string(), DictOverrides {
-            add: vec![DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() }],
+            add: vec![
+                DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() },
+                DictEntry { short: "STE".into(), long: "SUITE NUMBER".into(), canonical: Some(true), ..Default::default() },
+            ],
             remove: vec![],
-            override_entries: vec![DictEntry { short: "STE".into(), long: "SUITE NUMBER".into(), ..Default::default() }],
         });
         config.output.suffix = OutputFormat::Short;
         config.output.direction = OutputFormat::Long;
@@ -276,8 +273,7 @@ mod tests {
         assert_eq!(parsed.output.direction, OutputFormat::Long);
         assert_eq!(parsed.output.unit_type, OutputFormat::Long); // default preserved
         let unit = parsed.dictionaries.get("unit_type").unwrap();
-        assert_eq!(unit.add.len(), 1);
-        assert_eq!(unit.override_entries.len(), 1);
+        assert_eq!(unit.add.len(), 2);
     }
 
     #[test]

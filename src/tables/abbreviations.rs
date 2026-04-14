@@ -200,12 +200,10 @@ impl AbbrTable {
             });
         }
 
-        // Add/merge phase: process `add` entries, then deprecated `override` entries
-        // (override entries are treated as canonical adds for backward compat)
+        // Add/merge phase: process `add` entries
         let add_iter = overrides.add.iter().map(|e| (e, e.canonical.unwrap_or(false)));
-        let override_iter = overrides.override_entries.iter().map(|e| (e, true));
 
-        for (entry, is_canonical) in add_iter.chain(override_iter) {
+        for (entry, is_canonical) in add_iter {
             // AbbrGroup::new normalizes short/long to uppercase
             let normalized = AbbrGroup::new(&entry.short, &entry.long, entry.variants.clone());
             let short = normalized.short;
@@ -612,7 +610,6 @@ mod tests {
                 canonical: None,
             }],
             remove: vec![],
-            override_entries: vec![],
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.standardize("N E"), Some((0, "NE", "NORTHEAST")));
@@ -632,7 +629,6 @@ mod tests {
                 canonical: Some(true),
             }],
             remove: vec![],
-            override_entries: vec![],
         };
         let patched = table.patch(&overrides);
         let result = patched.standardize("NORTHEAST").unwrap();
@@ -652,7 +648,6 @@ mod tests {
                 canonical: None,
             }],
             remove: vec![],
-            override_entries: vec![],
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.standardize("WHSE"), Some((0, "WH", "WAREHOUSE")));
@@ -669,7 +664,6 @@ mod tests {
         let overrides = DictOverrides {
             add: vec![],
             remove: vec!["N E".into()], // matches a variant -> removes the whole NE group
-            override_entries: vec![],
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.standardize("NE"), None);
