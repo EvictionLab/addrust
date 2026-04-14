@@ -21,5 +21,9 @@ duckdb = { version = "1.4", optional = true, features = ["bundled"] }
 [features]
 duckdb = ["dep:duckdb"]
 
+[[bin]]
+name = "generate-suffixes"
+path = "src/bin/generate_suffixes.rs"
+
 [dev-dependencies]
 tempfile = "3"
