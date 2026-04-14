@@ -226,9 +226,9 @@ fn main() {
                     }
                 }
                 ListCommands::Tables { name } => {
-                    use addrust::tables::abbreviations::build_default_tables;
+                    use addrust::tables::abbreviations::load_default_tables;
 
-                    let tables = build_default_tables();
+                    let tables = load_default_tables();
                     let tables = if config.dictionaries.is_empty() {
                         tables
                     } else {

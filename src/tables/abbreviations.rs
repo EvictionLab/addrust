@@ -410,7 +410,7 @@ pub fn load_suffixes_from_toml(toml_str: &str) -> (HashMap<String, AbbrTable>, V
 }
 
 /// Build the default abbreviation tables (non-static, for patching).
-pub fn build_default_tables() -> Abbreviations {
+pub fn load_default_tables() -> Abbreviations {
     let mut tables = load_tables_from_toml(
         include_str!("../../data/defaults/tables.toml")
     );
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_na_values_table_exists() {
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let na = tables.get("na_values").unwrap();
         assert!(na.is_value_list());
         let vals = na.all_values();
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_street_name_abbr_table_exists() {
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let sna = tables.get("street_name_abbr").unwrap();
         assert!(!sna.is_value_list());
         assert_eq!(sna.to_long("MT"), Some("MOUNT"));
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_table_pattern_field() {
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let direction = abbr.get("direction").unwrap();
         assert!(direction.pattern_template.is_none());
     }
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_number_tables_registered() {
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let cardinal = tables.get("number_cardinal").unwrap();
         assert_eq!(cardinal.to_long("1"), Some("ONE"));
         assert_eq!(cardinal.to_long("42"), Some("FORTYTWO"));

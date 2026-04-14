@@ -532,10 +532,10 @@ mod tests {
 
     #[test]
     fn test_compile_all_default_steps() {
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         let toml_str = include_str!("../data/defaults/steps.toml");
         let defs: StepsDef = toml::from_str(toml_str).unwrap();
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let steps = compile_steps(&defs.step, &abbr);
         assert!(steps.len() > 20);
         assert_eq!(steps[0].step_type(), "rewrite");
@@ -545,9 +545,9 @@ mod tests {
     #[test]
     fn test_apply_rewrite_step() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let def = StepDef {
             step_type: "rewrite".to_string(),
             label: "test_rewrite".to_string(),
@@ -565,9 +565,9 @@ mod tests {
     #[test]
     fn test_apply_rewrite_from_table() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let toml_str = r#"
 [[step]]
 type = "rewrite"
@@ -586,9 +586,9 @@ table = "street_name_abbr"
     #[test]
     fn test_apply_extract_step() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let def = StepDef {
             step_type: "extract".to_string(),
             label: "test_number".to_string(),
@@ -608,9 +608,9 @@ table = "street_name_abbr"
     #[test]
     fn test_apply_rewrite_table_on_field() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let def = StepDef {
             step_type: "rewrite".to_string(),
             label: "std_suffix".to_string(),
@@ -629,8 +629,8 @@ table = "street_name_abbr"
 
     #[test]
     fn test_expand_template_all_values() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template("{direction}", &abbr);
         assert!(expanded.contains("NORTH"));
         assert!(expanded.contains("NE"));
@@ -638,8 +638,8 @@ table = "street_name_abbr"
 
     #[test]
     fn test_expand_template_short_accessor() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template("{direction$short}", &abbr);
         assert!(expanded.contains("NE"));
         assert!(!expanded.contains("NORTH"));
@@ -647,16 +647,16 @@ table = "street_name_abbr"
 
     #[test]
     fn test_expand_template_state_bounded() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template("{state}", &abbr);
         assert!(expanded.starts_with(r"(?:"));
     }
 
     #[test]
     fn test_expand_template_unit_type_includes_all() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template("{unit_type}", &abbr);
         assert!(expanded.contains("APARTMENT"));
         // # is included in the bounded regex; \b in the step pattern prevents false matches
@@ -665,16 +665,16 @@ table = "street_name_abbr"
 
     #[test]
     fn test_expand_template_regex_quantifiers_preserved() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template(r"\d{5}(?:\W\d{4})?", &abbr);
         assert_eq!(expanded, r"\d{5}(?:\W\d{4})?");
     }
 
     #[test]
     fn test_expand_template_mixed() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let expanded = expand_template(
             r"^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s([A-Z]{3,20})",
             &abbr,
@@ -713,9 +713,9 @@ table = "street_name_abbr"
     #[test]
     fn test_rewrite_with_source_field() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let def = StepDef {
             step_type: "rewrite".to_string(),
             label: "strip_hash".to_string(),
@@ -736,9 +736,9 @@ table = "street_name_abbr"
     #[test]
     fn test_extract_with_source_field_move() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let def = StepDef {
             step_type: "extract".to_string(),
             label: "promote_unit".to_string(),
@@ -760,9 +760,9 @@ table = "street_name_abbr"
     #[test]
     fn test_extract_with_targets() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let toml_str = r#"
 [[step]]
 type = "extract"
@@ -783,9 +783,9 @@ output_col = { unit_type = 1, unit = 2 }
     #[test]
     fn test_extract_targets_skip_if_filled() {
         use crate::address::AddressState;
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::config::OutputConfig;
-        let abbr = build_default_tables();
+        let abbr = load_default_tables();
         let toml_str = r#"
 [[step]]
 type = "extract"
@@ -806,8 +806,8 @@ skip_if_filled = true
 
     #[test]
     fn test_expand_replacement_simple_backref() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let re = Regex::new(r"(HIGHWAY)\s+(\d{1,3})").unwrap();
         let caps = re.captures("HIGHWAY 42").unwrap().unwrap();
         let result = expand_replacement("$1 ${2:number_cardinal}", &caps, &abbr);
@@ -816,8 +816,8 @@ skip_if_filled = true
 
     #[test]
     fn test_expand_replacement_ordinal() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let re = Regex::new(r"(\d{1,3})(ST|ND|RD|TH)").unwrap();
         let caps = re.captures("21ST").unwrap().unwrap();
         let result = expand_replacement("${1:number_ordinal}", &caps, &abbr);
@@ -826,8 +826,8 @@ skip_if_filled = true
 
     #[test]
     fn test_expand_replacement_fraction() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
         let caps = re.captures("8 5/8").unwrap().unwrap();
         let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);
@@ -836,8 +836,8 @@ skip_if_filled = true
 
     #[test]
     fn test_expand_replacement_fraction_half() {
-        use crate::tables::abbreviations::build_default_tables;
-        let abbr = build_default_tables();
+        use crate::tables::abbreviations::load_default_tables;
+        let abbr = load_default_tables();
         let re = Regex::new(r"(\d{1,3})\s+(\d+)/(\d+)").unwrap();
         let caps = re.captures("8 1/2").unwrap().unwrap();
         let result = expand_replacement("${1:number_cardinal} AND ${2/3:fraction}", &caps, &abbr);

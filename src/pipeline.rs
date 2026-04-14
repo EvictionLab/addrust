@@ -16,9 +16,9 @@ impl Pipeline {
     /// Build pipeline from a Config (file-based configuration).
     pub fn from_config(config: &crate::config::Config) -> Self {
         use crate::step::{compile_step, compile_steps, StepsDef};
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
 
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let tables = if config.dictionaries.is_empty() {
             tables
         } else {
@@ -105,10 +105,10 @@ impl Pipeline {
 
     /// Build a pipeline using the step-based parse path with default tables and steps.
     pub fn from_steps_default() -> Self {
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::step::{compile_steps, StepsDef};
 
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let toml_str = include_str!("../data/defaults/steps.toml");
         let defs: StepsDef = toml::from_str(toml_str)
             .expect("Failed to parse default steps.toml");

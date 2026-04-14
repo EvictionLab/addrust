@@ -1,5 +1,5 @@
 use crate::pipeline::Pipeline;
-use crate::tables::abbreviations::build_default_tables;
+use crate::tables::abbreviations::load_default_tables;
 
 /// Generate a default .addrust.toml content string with all steps and tables.
 pub fn generate_default_config() -> String {
@@ -30,7 +30,7 @@ pub fn generate_default_config() -> String {
     out.push('\n');
 
     // Dictionary sections
-    let tables = build_default_tables();
+    let tables = load_default_tables();
     for name in tables.table_names() {
         let table = tables.get(name).unwrap();
         out.push_str(&format!("# [dictionaries.{}]\n", name));

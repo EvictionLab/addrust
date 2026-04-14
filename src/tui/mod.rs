@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
-use crate::tables::abbreviations::build_default_tables;
+use crate::tables::abbreviations::load_default_tables;
 
 use tabs::{
     DictGroupState, GroupStatus, OutputSettingState, StepState,
@@ -60,6 +60,10 @@ pub(crate) struct App {
     pub(crate) output_settings: Vec<OutputSettingState>,
     pub(crate) output_list_state: ratatui::widgets::TableState,
 
+    // -- Dictionaries: cached per-table metadata --
+    /// Whether each dictionary table is a value-list (no long forms).
+    pub(crate) dict_is_value_list: Vec<bool>,
+
     // -- Step/dict editor panel --
     /// Panel overlay state (step or dict editor).
     pub(crate) panel: Option<panel::PanelKind>,
@@ -70,7 +74,7 @@ pub(crate) struct App {
 impl App {
     fn new(config_path: PathBuf) -> Self {
         let config = Config::load(&config_path);
-        let default_tables = build_default_tables();
+        let default_tables = load_default_tables();
 
         // Parse default step definitions
         let toml_str = include_str!("../../data/defaults/steps.toml");
@@ -155,6 +159,14 @@ impl App {
         // Insert "suffix" in sorted position
         let suffix_pos = table_names.partition_point(|n| n.as_str() < "suffix");
         table_names.insert(suffix_pos, "suffix".to_string());
+
+        let dict_is_value_list: Vec<bool> = table_names.iter()
+            .map(|name| {
+                default_tables.get(name)
+                    .map(|t| t.is_value_list())
+                    .unwrap_or(false)
+            })
+            .collect();
 
         let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
@@ -341,6 +353,7 @@ impl App {
             table_names,
             dict_tab_index: 0,
             dict_entries,
+            dict_is_value_list,
             dict_list_state,
             output_settings,
             output_list_state,

@@ -6,7 +6,6 @@ use ratatui::widgets::{Block, Cell, Row, Table, Tabs};
 use ratatui::Frame;
 
 use crate::step::OutputCol;
-use crate::tables::abbreviations::build_default_tables;
 
 use super::App;
 
@@ -586,19 +585,8 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
         .divider(" | ");
     frame.render_widget(subtabs, subtab_area);
 
-    // Check if this is a value-list table
-    let is_value_list = {
-        let table_name = &app.table_names[app.dict_tab_index];
-        if table_name == "suffix" {
-            false // suffix is always a short/long table
-        } else {
-            let tables = build_default_tables();
-            tables
-                .get(table_name)
-                .map(|t| t.is_value_list())
-                .unwrap_or(false)
-        }
-    };
+    // Check if this is a value-list table (cached at startup)
+    let is_value_list = app.dict_is_value_list[app.dict_tab_index];
 
     let has_tags = {
         let entries = app.current_dict_entries();
