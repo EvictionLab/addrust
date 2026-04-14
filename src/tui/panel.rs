@@ -68,7 +68,10 @@ mod types {
         pub(crate) short: String,
         pub(crate) long: String,
         pub(crate) variants: Vec<(String, bool)>,  // (text, enabled)
-        /// Which field is focused: 0=short, 1=long, 2=variants.
+        pub(crate) tags: Vec<(String, bool)>,       // (tag text, enabled)
+        /// Whether to show the Tags field (true when table has tagged entries).
+        pub(crate) has_tags: bool,
+        /// Which field is focused: 0=short, 1=long, 2=variants, 3=tags.
         pub(crate) field_cursor: usize,
         /// Current focus.
         pub(crate) focus: PanelFocus,
@@ -90,7 +93,9 @@ mod types {
     }
 }
 
-const DICT_FIELD_COUNT: u16 = 3; // Short form, Long form, Variants
+fn dict_field_count(panel: &DictPanelState) -> u16 {
+    if panel.has_tags { 4 } else { 3 }
+}
 
 impl PanelKind {
     /// Number of content lines for the panel body (fields + dropdown + border + spacing).
@@ -106,19 +111,21 @@ impl PanelKind {
                 2 + panel.visible_fields.len() as u16 + dropdown + 2
             }
             PanelKind::Dict(panel) => {
-                let dropdown = if panel.field_cursor == 2 {
-                    match &panel.focus {
-                        PanelFocus::Dropdown { .. } => panel.variants.len().max(1) as u16,
-                        PanelFocus::DropdownEdit { item, .. } => {
-                            // +1 line if adding a new variant beyond existing
-                            let extra = if *item >= panel.variants.len() { 1 } else { 0 };
-                            (panel.variants.len() as u16 + extra).max(1)
-                        }
-                        _ => 0,
+                let items = match panel.field_cursor {
+                    2 => &panel.variants,
+                    3 if panel.has_tags => &panel.tags,
+                    _ => &Vec::new(),
+                };
+                let dropdown = match &panel.focus {
+                    PanelFocus::Dropdown { .. } if panel.field_cursor >= 2 => items.len().max(1) as u16,
+                    PanelFocus::DropdownEdit { item, .. } if panel.field_cursor >= 2 => {
+                        let extra = if *item >= items.len() { 1 } else { 0 };
+                        (items.len() as u16 + extra).max(1)
                     }
-                } else { 0 };
+                    _ => 0,
+                };
                 // fields + dropdown + body border (2) + blank line (1)
-                DICT_FIELD_COUNT + dropdown + 2 + 1
+                dict_field_count(panel) + dropdown + 2 + 1
             }
         }
     }
@@ -817,7 +824,10 @@ pub(crate) fn render_dict_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
-    let fields = ["Short form", "Long form", "Variants"];
+    let mut fields: Vec<&str> = vec!["Short form", "Long form", "Variants"];
+    if panel.has_tags {
+        fields.push("Tags");
+    }
 
     for (i, &label) in fields.iter().enumerate() {
         let is_selected = panel.focus == PanelFocus::Navigating && panel.field_cursor == i;
@@ -846,6 +856,14 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
                     .collect::<Vec<_>>()
                     .join(", ")
             },
+            3 => if panel.tags.is_empty() {
+                "(none)".to_string()
+            } else {
+                panel.tags.iter()
+                    .map(|(t, _)| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
             _ => String::new(),
         };
 
@@ -863,11 +881,13 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
             Span::styled(value_padded, style),
         ]));
 
-        if i == 2
+        // Render dropdown for expandable fields (variants=2, tags=3)
+        if (i == 2 || i == 3)
             && let PanelFocus::Dropdown { cursor } | PanelFocus::DropdownEdit { item: cursor, .. } = &panel.focus
-            && panel.field_cursor == 2
+            && panel.field_cursor == i
         {
-            for (vi, (text, enabled)) in panel.variants.iter().enumerate() {
+            let items = if i == 2 { &panel.variants } else { &panel.tags };
+            for (vi, (text, enabled)) in items.iter().enumerate() {
                 let is_sel = vi == *cursor;
                 let check = widgets::checkbox(*enabled);
 
@@ -903,9 +923,9 @@ fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
                     display,
                 ]));
             }
-            // New variant being typed (item index beyond existing variants)
+            // New item being typed (item index beyond existing items)
             if let PanelFocus::DropdownEdit { item, cursor: c, buffer } = &panel.focus
-                && *item >= panel.variants.len() {
+                && *item >= items.len() {
                     let prefix = format!("    {} ", widgets::checkbox(true));
                     let avail = area.width.saturating_sub(prefix.len() as u16 + 2) as usize;
                     let cursor_line = widgets::cursor_line(buffer, *c, avail);
@@ -930,11 +950,13 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
         _ => return,
     };
 
+    let field_count = dict_field_count(panel) as usize;
+
     match panel.focus.clone() {
         PanelFocus::Navigating => {
             match code {
-                KeyCode::Down => { panel.field_cursor = (panel.field_cursor + 1) % 3; }
-                KeyCode::Up => { panel.field_cursor = if panel.field_cursor == 0 { 2 } else { panel.field_cursor - 1 }; }
+                KeyCode::Down => { panel.field_cursor = (panel.field_cursor + 1) % field_count; }
+                KeyCode::Up => { panel.field_cursor = if panel.field_cursor == 0 { field_count - 1 } else { panel.field_cursor - 1 }; }
                 KeyCode::Enter => {
                     match panel.field_cursor {
                         0 => {
@@ -947,7 +969,15 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
                         }
                         2 => {
                             if panel.variants.is_empty() {
-                                // Go straight to adding a new variant
+                                panel.focus = PanelFocus::DropdownEdit {
+                                    item: 0, cursor: 0, buffer: String::new(),
+                                };
+                            } else {
+                                panel.focus = PanelFocus::Dropdown { cursor: 0 };
+                            }
+                        }
+                        3 => {
+                            if panel.tags.is_empty() {
                                 panel.focus = PanelFocus::DropdownEdit {
                                     item: 0, cursor: 0, buffer: String::new(),
                                 };
@@ -990,19 +1020,20 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
         PanelFocus::Dropdown { .. } => {
             if let Some(PanelKind::Dict(panel)) = &mut app.panel
                 && let PanelFocus::Dropdown { cursor } = &mut panel.focus {
-                    let count = panel.variants.len().max(1);
+                    let items = if panel.field_cursor == 3 { &mut panel.tags } else { &mut panel.variants };
+                    let count = items.len().max(1);
                     match code {
                         KeyCode::Down => { *cursor = (*cursor + 1) % count; }
                         KeyCode::Up => { *cursor = if *cursor == 0 { count - 1 } else { *cursor - 1 }; }
                         KeyCode::Char(' ') => {
-                            if *cursor < panel.variants.len() {
-                                panel.variants[*cursor].1 = !panel.variants[*cursor].1;
+                            if *cursor < items.len() {
+                                items[*cursor].1 = !items[*cursor].1;
                                 app.dirty = true;
                             }
                         }
                         KeyCode::Enter => {
-                            if *cursor < panel.variants.len() {
-                                let text = panel.variants[*cursor].0.clone();
+                            if *cursor < items.len() {
+                                let text = items[*cursor].0.clone();
                                 let len = text.len();
                                 panel.focus = PanelFocus::DropdownEdit {
                                     item: *cursor, cursor: len, buffer: text,
@@ -1010,15 +1041,16 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
                             }
                         }
                         KeyCode::Char('a') => {
+                            let item_len = items.len();
                             panel.focus = PanelFocus::DropdownEdit {
-                                item: panel.variants.len(), cursor: 0, buffer: String::new(),
+                                item: item_len, cursor: 0, buffer: String::new(),
                             };
                         }
                         KeyCode::Char('d') => {
-                            if *cursor < panel.variants.len() {
-                                panel.variants.remove(*cursor);
-                                if *cursor >= panel.variants.len() && !panel.variants.is_empty() {
-                                    *cursor = panel.variants.len() - 1;
+                            if *cursor < items.len() {
+                                items.remove(*cursor);
+                                if *cursor >= items.len() && !items.is_empty() {
+                                    *cursor = items.len() - 1;
                                 }
                                 app.dirty = true;
                             }
@@ -1031,21 +1063,24 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
         PanelFocus::DropdownEdit { .. } => {
             if let Some(PanelKind::Dict(panel)) = &mut app.panel
                 && let PanelFocus::DropdownEdit { item, cursor, buffer } = &mut panel.focus {
+                    let items = if panel.field_cursor == 3 { &mut panel.tags } else { &mut panel.variants };
                     match code {
                         KeyCode::Enter => {
                             let value = buffer.clone();
                             if !value.is_empty() {
-                                if *item >= panel.variants.len() {
-                                    panel.variants.push((value, true));
+                                if *item >= items.len() {
+                                    items.push((value, true));
                                 } else {
-                                    panel.variants[*item].0 = value;
+                                    items[*item].0 = value;
                                 }
                                 app.dirty = true;
                             }
-                            panel.focus = PanelFocus::Dropdown { cursor: panel.variants.len().saturating_sub(1) };
+                            let new_cursor = items.len().saturating_sub(1);
+                            panel.focus = PanelFocus::Dropdown { cursor: new_cursor };
                         }
                         KeyCode::Esc => {
-                            panel.focus = PanelFocus::Dropdown { cursor: (*item).min(panel.variants.len().saturating_sub(1)) };
+                            let new_cursor = (*item).min(items.len().saturating_sub(1));
+                            panel.focus = PanelFocus::Dropdown { cursor: new_cursor };
                         }
                         KeyCode::Backspace => { if *cursor > 0 { buffer.remove(*cursor - 1); *cursor -= 1; } }
                         KeyCode::Left => { if *cursor > 0 { *cursor -= 1; } }
@@ -1062,13 +1097,17 @@ fn close_dict_panel(app: &mut App) {
     use super::tabs::{DictGroupState, GroupStatus};
 
     // Clone fields out of panel to avoid borrow conflict with app mutation
-    let (entry_index, is_new, short, long, variants) = match &app.panel {
+    let (entry_index, is_new, short, long, variants, tags) = match &app.panel {
         Some(PanelKind::Dict(d)) => (
             d.entry_index,
             d.is_new,
             d.short.clone(),
             d.long.clone(),
             d.variants.iter()
+                .filter(|(_, enabled)| *enabled)
+                .map(|(text, _)| text.clone())
+                .collect::<Vec<_>>(),
+            d.tags.iter()
                 .filter(|(_, enabled)| *enabled)
                 .map(|(text, _)| text.clone())
                 .collect::<Vec<_>>(),
@@ -1083,12 +1122,12 @@ fn close_dict_panel(app: &mut App) {
                 short: short.clone(),
                 long: long.clone(),
                 variants: variants.clone(),
-                tags: vec![],
+                tags: tags.clone(),
                 status: GroupStatus::Added,
                 original_short: short,
                 original_long: long,
                 original_variants: variants,
-                original_tags: vec![],
+                original_tags: tags,
             });
             let len = entries.len();
             app.dict_list_state.select(Some(len - 1));
@@ -1099,11 +1138,13 @@ fn close_dict_panel(app: &mut App) {
         entry.short = short;
         entry.long = long;
         entry.variants = variants;
+        entry.tags = tags;
 
         if entry.status == GroupStatus::Default
             && (entry.short != entry.original_short
                 || entry.long != entry.original_long
-                || entry.variants != entry.original_variants)
+                || entry.variants != entry.original_variants
+                || entry.tags != entry.original_tags)
         {
             entry.status = GroupStatus::Modified;
         }

@@ -262,11 +262,14 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         }
         // Add new entry via panel
         KeyCode::Char('a') => {
+            let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
             app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
                 entry_index: app.current_dict_entries().len(),
                 short: String::new(),
                 long: String::new(),
                 variants: vec![],
+                tags: vec![],
+                has_tags,
                 field_cursor: 0,
                 focus: super::panel::PanelFocus::InlineEdit { cursor: 0, buffer: String::new() },
                 is_new: true,
@@ -286,6 +289,7 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                         if entry.short != entry.original_short
                             || entry.long != entry.original_long
                             || entry.variants != entry.original_variants
+                            || entry.tags != entry.original_tags
                         {
                             entry.status = GroupStatus::Modified;
                         } else {
@@ -310,53 +314,38 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         // Open dict panel
         KeyCode::Enter => {
             if let Some(i) = app.dict_list_state.selected() {
+                let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
                 let entry = &app.current_dict_entries()[i];
                 let variants: Vec<(String, bool)> = entry.variants.iter()
                     .map(|v| (v.clone(), true))
+                    .collect();
+                let tags: Vec<(String, bool)> = entry.tags.iter()
+                    .map(|t| (t.clone(), true))
                     .collect();
                 app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
                     entry_index: i,
                     short: entry.short.clone(),
                     long: entry.long.clone(),
                     variants,
+                    tags,
+                    has_tags,
                     field_cursor: 0,
                     focus: super::panel::PanelFocus::Navigating,
                     is_new: false,
                 }));
             }
         }
-        // Toggle 'common' tag on selected entry
-        KeyCode::Char('t') => {
-            if let Some(i) = app.dict_list_state.selected() {
-                let entries = app.current_dict_entries_mut();
-                if i < entries.len() {
-                    let entry = &mut entries[i];
-                    let tag = "common".to_string();
-                    if entry.tags.contains(&tag) {
-                        entry.tags.retain(|t| t != &tag);
-                    } else {
-                        entry.tags.push(tag);
-                    }
-                    if entry.tags != entry.original_tags {
-                        entry.status = GroupStatus::Modified;
-                    } else if entry.status == GroupStatus::Modified
-                        && entry.short == entry.original_short
-                            && entry.long == entry.original_long
-                            && entry.variants == entry.original_variants
-                    {
-                            entry.status = GroupStatus::Default;
-                        }
-                    app.dirty = true;
-                }
-            }
-        }
         // Edit entry via panel, focused on long form
         KeyCode::Char('e') => {
             if let Some(i) = app.dict_list_state.selected() {
+                let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
                     let variants: Vec<(String, bool)> = entry.variants.iter()
                         .map(|v| (v.clone(), true))
+                        .collect();
+                    let tags: Vec<(String, bool)> = entry.tags.iter()
+                        .map(|t| (t.clone(), true))
                         .collect();
                     let cursor = entry.long.len();
                     app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
@@ -364,6 +353,8 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                         short: entry.short.clone(),
                         long: entry.long.clone(),
                         variants,
+                        tags,
+                        has_tags,
                         field_cursor: 1,
                         focus: super::panel::PanelFocus::InlineEdit { cursor, buffer: entry.long.clone() },
                         is_new: false,
