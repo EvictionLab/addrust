@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -534,6 +535,81 @@ fn build_common_suffixes() -> AbbrTable {
     ])
 }
 
+// --- TOML deserialization structs ---
+
+#[derive(Deserialize)]
+struct GroupDef {
+    short: String,
+    #[serde(default)]
+    long: String,
+    #[serde(default)]
+    variants: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TableDef {
+    groups: Vec<GroupDef>,
+}
+
+#[derive(Deserialize)]
+struct SuffixFileDef {
+    suffix: TableDef,
+}
+
+/// Load abbreviation tables from a TOML string (tables.toml format).
+/// Each top-level key becomes a table name.
+pub fn load_tables_from_toml(toml_str: &str) -> HashMap<String, AbbrTable> {
+    let raw: HashMap<String, TableDef> = toml::from_str(toml_str)
+        .expect("Failed to parse tables TOML");
+    raw.into_iter()
+        .map(|(name, def)| {
+            let groups = def.groups.into_iter()
+                .map(|g| AbbrGroup {
+                    short: g.short,
+                    long: g.long,
+                    variants: g.variants,
+                })
+                .collect();
+            (name, AbbrTable::from_groups(groups))
+        })
+        .collect()
+}
+
+/// Load suffix table from TOML, producing both suffix_all and suffix_common.
+/// suffix_common is derived by filtering groups with tags containing "common".
+pub fn load_suffixes_from_toml(toml_str: &str) -> HashMap<String, AbbrTable> {
+    let raw: SuffixFileDef = toml::from_str(toml_str)
+        .expect("Failed to parse suffixes TOML");
+
+    let all_groups: Vec<(AbbrGroup, Vec<String>)> = raw.suffix.groups.into_iter()
+        .map(|g| {
+            let tags = g.tags;
+            let group = AbbrGroup {
+                short: g.short,
+                long: g.long,
+                variants: g.variants,
+            };
+            (group, tags)
+        })
+        .collect();
+
+    let common_groups: Vec<AbbrGroup> = all_groups.iter()
+        .filter(|(_, tags)| tags.contains(&"common".to_string()))
+        .map(|(g, _)| g.clone())
+        .collect();
+
+    let all: Vec<AbbrGroup> = all_groups.into_iter()
+        .map(|(g, _)| g)
+        .collect();
+
+    let mut tables = HashMap::new();
+    tables.insert("suffix_all".to_string(), AbbrTable::from_groups(all));
+    tables.insert("suffix_common".to_string(), AbbrTable::from_groups(common_groups));
+    tables
+}
+
 /// Build the default abbreviation tables (non-static, for patching).
 pub fn build_default_tables() -> Abbreviations {
     let mut tables = HashMap::new();
@@ -821,5 +897,56 @@ mod tests {
         assert_eq!(strip_zero_width_assertions(r"(?<!FOO)BAR(?=\d)"), "BAR");
         assert_eq!(strip_zero_width_assertions(r"HELLO"), "HELLO");
         assert_eq!(strip_zero_width_assertions(r"A\(B"), r"A\(B"); // escaped paren preserved
+    }
+
+    #[test]
+    fn test_load_tables_from_toml() {
+        let toml_str = r#"
+[direction]
+groups = [
+    { short = "N", long = "NORTH" },
+    { short = "S", long = "SOUTH" },
+]
+
+[na_values]
+groups = [
+    { short = "NULL" },
+    { short = "NAN" },
+]
+"#;
+        let tables = load_tables_from_toml(toml_str);
+        assert_eq!(tables.len(), 2);
+
+        let dir = tables.get("direction").unwrap();
+        assert_eq!(dir.to_long("N"), Some("NORTH"));
+        assert_eq!(dir.to_long("S"), Some("SOUTH"));
+
+        let na = tables.get("na_values").unwrap();
+        assert!(na.is_value_list());
+        assert!(na.all_values().contains(&"NULL"));
+    }
+
+    #[test]
+    fn test_load_suffixes_from_toml() {
+        let toml_str = r#"
+[suffix]
+groups = [
+    { short = "AVE", long = "AVENUE", variants = ["AV"], tags = ["common"] },
+    { short = "STRA", long = "STRAVENUE" },
+    { short = "BLVD", long = "BOULEVARD", tags = ["common"] },
+]
+"#;
+        let tables = load_suffixes_from_toml(toml_str);
+
+        let all = tables.get("suffix_all").unwrap();
+        assert_eq!(all.groups.len(), 3);
+        assert_eq!(all.to_long("AV"), Some("AVENUE"));
+        assert_eq!(all.to_long("STRA"), Some("STRAVENUE"));
+
+        let common = tables.get("suffix_common").unwrap();
+        assert_eq!(common.groups.len(), 2);
+        assert_eq!(common.to_long("AVE"), Some("AVENUE"));
+        assert_eq!(common.to_long("BLVD"), Some("BOULEVARD"));
+        assert_eq!(common.standardize("STRA"), None);
     }
 }
