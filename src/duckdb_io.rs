@@ -86,20 +86,16 @@ pub fn write_parsed(
     originals: &[String],
     parsed: &[Address],
 ) -> Result<(), String> {
+    use crate::address::COL_DEFS;
+
+    // Build CREATE TABLE from COL_DEFS
+    let col_defs: Vec<String> = COL_DEFS.iter()
+        .map(|d| format!("\"{}\" VARCHAR", d.key))
+        .collect();
     let create_sql = format!(
-        "CREATE TABLE \"{}\" (
-            address VARCHAR,
-            street_number VARCHAR,
-            pre_direction VARCHAR,
-            street_name VARCHAR,
-            suffix VARCHAR,
-            post_direction VARCHAR,
-            unit_type VARCHAR,
-            unit VARCHAR,
-            po_box VARCHAR,
-            building VARCHAR
-        )",
-        output_table
+        "CREATE TABLE \"{}\" (address VARCHAR, {})",
+        output_table,
+        col_defs.join(", ")
     );
 
     conn.execute_batch(&create_sql)
@@ -120,19 +116,20 @@ pub fn write_parsed(
         .map_err(|e| format!("Failed to create appender: {e}"))?;
 
     for &i in &indices {
+        // Build params dynamically from COL_DEFS
+        let field_values: Vec<Option<&str>> = COL_DEFS.iter()
+            .map(|d| parsed[i].field(d.col).as_deref())
+            .collect();
+
+        let mut params: Vec<&dyn duckdb::ToSql> = Vec::with_capacity(1 + field_values.len());
+        let orig: &dyn duckdb::ToSql = &originals[i].as_str();
+        params.push(orig);
+        for val in &field_values {
+            params.push(val as &dyn duckdb::ToSql);
+        }
+
         appender
-            .append_row(duckdb::params![
-                originals[i].as_str(),
-                parsed[i].street_number.as_deref(),
-                parsed[i].pre_direction.as_deref(),
-                parsed[i].street_name.as_deref(),
-                parsed[i].suffix.as_deref(),
-                parsed[i].post_direction.as_deref(),
-                parsed[i].unit_type.as_deref(),
-                parsed[i].unit.as_deref(),
-                parsed[i].po_box.as_deref(),
-                parsed[i].building.as_deref(),
-            ])
+            .append_row(params.as_slice())
             .map_err(|e| format!("Failed to append row: {e}"))?;
     }
 

@@ -1,5 +1,5 @@
 use crate::pipeline::Pipeline;
-use crate::tables::abbreviations::build_default_tables;
+use crate::tables::abbreviations::load_default_tables;
 
 /// Generate a default .addrust.toml content string with all steps and tables.
 pub fn generate_default_config() -> String {
@@ -16,11 +16,11 @@ pub fn generate_default_config() -> String {
     out.push_str("# Available steps (in pipeline order):\n");
 
     let pipeline = Pipeline::default();
-    for step in pipeline.step_summaries() {
-        let template = step.pattern_template.as_deref().unwrap_or("");
+    for step in pipeline.steps() {
+        let template = step.pattern_template().unwrap_or("");
         out.push_str(&format!(
             "#   {:30} (type: {})\n",
-            step.label, step.step_type
+            step.label(), step.step_type()
         ));
         if !template.is_empty() {
             out.push_str(&format!("#     pattern: {}\n", template));
@@ -30,7 +30,7 @@ pub fn generate_default_config() -> String {
     out.push('\n');
 
     // Dictionary sections
-    let tables = build_default_tables();
+    let tables = load_default_tables();
     for name in tables.table_names() {
         let table = tables.get(name).unwrap();
         out.push_str(&format!("# [dictionaries.{}]\n", name));

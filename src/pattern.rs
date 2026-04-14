@@ -3,7 +3,7 @@
 pub enum PatternSegment {
     /// Literal regex text (not an alternation group).
     Literal(String),
-    /// A table placeholder like {suffix_common}.
+    /// A table placeholder like {suffix:common}.
     TableRef(String),
     /// An alternation group with individually toggleable alternatives.
     AlternationGroup {
@@ -29,8 +29,8 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
 
     while i < chars.len() {
         // Check for table reference {name}
-        if chars[i] == '{' {
-            if let Some(end) = find_table_ref(&chars, i) {
+        if chars[i] == '{'
+            && let Some(end) = find_table_ref(&chars, i) {
                 // Flush literal before this
                 if i > literal_start {
                     segments.push(PatternSegment::Literal(
@@ -43,11 +43,10 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
                 literal_start = i;
                 continue;
             }
-        }
 
         // Check for group (...)
-        if chars[i] == '(' {
-            if let Some(end) = find_matching_paren(&chars, i) {
+        if chars[i] == '('
+            && let Some(end) = find_matching_paren(&chars, i) {
                 let group_text: String = chars[i..=end].iter().collect();
                 let inner = extract_inner(&chars, i, end);
 
@@ -73,7 +72,6 @@ pub fn parse_pattern(template: &str) -> Vec<PatternSegment> {
                     continue;
                 }
             }
-        }
 
         i += 1;
     }
@@ -94,7 +92,7 @@ fn find_table_ref(chars: &[char], start: usize) -> Option<usize> {
     while i < chars.len() {
         if chars[i] == '}' {
             let name: String = chars[start + 1..i].iter().collect();
-            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') {
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == ':') {
                 return Some(i);
             }
             return None;
@@ -238,10 +236,10 @@ mod tests {
 
     #[test]
     fn test_parse_table_ref() {
-        let segments = parse_pattern(r"(?<!^)\b({suffix_common})\s*$");
+        let segments = parse_pattern(r"(?<!^)\b({suffix:common})\s*$");
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0], PatternSegment::Literal(r"(?<!^)\b(".to_string()));
-        assert_eq!(segments[1], PatternSegment::TableRef("suffix_common".to_string()));
+        assert_eq!(segments[1], PatternSegment::TableRef("suffix:common".to_string()));
         assert_eq!(segments[2], PatternSegment::Literal(r")\s*$".to_string()));
     }
 
@@ -316,17 +314,17 @@ mod tests {
 
     #[test]
     fn test_rebuild_preserves_table_refs() {
-        let segments = parse_pattern(r"(?<!^)\b({suffix_common})\s*$");
+        let segments = parse_pattern(r"(?<!^)\b({suffix:common})\s*$");
         let rebuilt = rebuild_pattern(&segments);
-        assert_eq!(rebuilt, r"(?<!^)\b({suffix_common})\s*$");
+        assert_eq!(rebuilt, r"(?<!^)\b({suffix:common})\s*$");
     }
 
     #[test]
     fn test_parse_table_ref_with_accessor() {
-        let segments = parse_pattern(r"\b({street_name_abbr$short})\b");
+        let segments = parse_pattern(r"\b({street_name$short})\b");
         assert_eq!(segments.len(), 3);
         assert_eq!(segments[0], PatternSegment::Literal(r"\b(".to_string()));
-        assert_eq!(segments[1], PatternSegment::TableRef("street_name_abbr$short".to_string()));
+        assert_eq!(segments[1], PatternSegment::TableRef("street_name$short".to_string()));
         assert_eq!(segments[2], PatternSegment::Literal(r")\b".to_string()));
     }
 

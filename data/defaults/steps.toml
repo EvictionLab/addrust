@@ -1,32 +1,105 @@
 # addrust default pipeline steps
 # Order matters — steps execute top to bottom.
 
+# --- Pre-cleaning ---
+[[step]]
+type = "rewrite"
+label = "fix_ampersand"
+pattern = '&AMP;'
+replacement = '&'
+
+[[step]]
+type = "rewrite"
+label = "dedup_nonword"
+pattern = '(\W)\1+'
+replacement = '$1'
+
+[[step]]
+type = "rewrite"
+label = "period_between"
+pattern = '([^\s])\.([^\s])'
+replacement = '$1 $2'
+
+[[step]]
+type = "rewrite"
+label = "squish_hyphen"
+pattern = '([A-Z0-9])\s*-\s*([A-Z0-9])'
+replacement = '$1-$2'
+
+[[step]]
+type = "rewrite"
+label = "unstick_number_letters"
+pattern = '^(\d+)([A-Z]{2,})'
+replacement = '$1 $2'
+
+[[step]]
+type = "rewrite"
+label = "stick_dir_number"
+pattern = '^([NSEW]) (\d+)\b'
+replacement = '${1}${2}'
+
+[[step]]
+type = "rewrite"
+label = "pound_ordinal"
+pattern = '#(\d+[RNTS][DHT])'
+replacement = '$1'
+
+[[step]]
+type = "rewrite"
+label = "ampersand_to_and"
+pattern = '([A-Z])\s*&\s*([A-Z])'
+replacement = '$1 AND $2'
+
+[[step]]
+type = "rewrite"
+label = "slash_to_space"
+pattern = '(?<!\d)/(?!\d)'
+replacement = ' '
+
+[[step]]
+type = "rewrite"
+label = "trailing_nonword"
+pattern = '\W+$'
+replacement = ''
+
+[[step]]
+type = "rewrite"
+label = "remove_periods_apostrophes"
+pattern = "[.']+"
+replacement = ''
+
+[[step]]
+type = "rewrite"
+label = "remove_punctuation"
+pattern = '[;<>$()"]+|`'
+replacement = ''
+
 # --- NA removal ---
 [[step]]
 type = "rewrite"
 label = "na_check"
-pattern = '(?i)^(N/?A|{na_values})$'
+pattern = '(?i)^(N\W?A|{na_values})$'
 replacement = ''
 
 # --- City / State / Zip ---
 [[step]]
 type = "extract"
 label = "city_state_zip"
-pattern = ',\s*([A-Z][A-Z ]+)\W+{state}\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
-target = "extra_back"
+pattern = ',\s*([A-Z][A-Z ]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
+output_col = { city = 1, state = 2, zip = 3 }
 
 # --- PO Box ---
-# Single extraction captures the full PO BOX text; standardize_po_box reformats it.
 [[step]]
 type = "extract"
 label = "po_box"
 pattern = '\b(?:P\W*O\W*BO?X|POB)\W*(\w+)\b'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
+replacement = 'PO BOX $1'
 
 # --- Number-to-word conversion ---
 # Runs early so "HIGHWAY 1" becomes "HIGHWAY ONE" before extra_front
-# would split it, and "42ND" becomes "FORTY SECOND" before extraction.
+# would split it, and "42ND" becomes "FORTYSECOND" before extraction.
 [[step]]
 type = "rewrite"
 label = "fractional_road"
@@ -49,21 +122,15 @@ replacement = '${1:number_ordinal}'
 [[step]]
 type = "rewrite"
 label = "unstick_suffix_unit"
-pattern = '\b({suffix_common})({unit_type})\b'
+pattern = '\b({suffix:common})({unit_type})\b'
 replacement = '$1 $2'
-
-[[step]]
-type = "rewrite"
-label = "st_to_saint"
-pattern = '^(\d{1,6}\s(?:(?:{direction})\s)?)ST\s(?!(?:{unit_location}|{unit_type}|{suffix_all})\b)([A-Z]{3,20})'
-replacement = '${1}SAINT $2'
 
 # --- Extra front ---
 [[step]]
 type = "extract"
 label = "extra_front"
 pattern = '^(?:(?:[A-Z\W]+\s)+(?=(?:{direction})\s\d))|^(?:(?:[A-Z\W]+\s)+(?=\d))'
-target = "extra_front"
+output_col = "extra_front"
 skip_if_filled = true
 
 # --- Street number ---
@@ -71,7 +138,7 @@ skip_if_filled = true
 type = "extract"
 label = "street_number_coords"
 pattern = '^([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)\b'
-target = "street_number"
+output_col = "street_number"
 skip_if_filled = true
 replacement = '${1}${2} ${3}${4}'
 
@@ -79,36 +146,37 @@ replacement = '${1}${2} ${3}${4}'
 type = "extract"
 label = "street_number"
 pattern = '^\d+\b'
-target = "street_number"
+output_col = "street_number"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "unit_fraction"
 pattern = '^[1-9]/\d+\b'
-target = "unit"
+output_col = "unit"
+skip_if_filled = true
+
+# --- Building ---
+[[step]]
+type = "extract"
+label = "building"
+pattern = '\b(BUILDING|BL?DG)\W*(\d+|[A-Z])\b'
+output_col = { building_type = 1, building = 2 }
 skip_if_filled = true
 
 # --- Unit ---
 [[step]]
 type = "extract"
 label = "unit_type_value"
-pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$'
-targets = { unit_type = 1, unit = 2 }
-skip_if_filled = true
-
-[[step]]
-type = "extract"
-label = "unit_pound"
-pattern = '#\W*(\w+)\s*$'
-target = "unit"
+pattern = '(\b(?:{unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+|[A-Z])\s*$'
+output_col = { unit_type = 1, unit = 2 }
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "unit_location"
 pattern = '\b({unit_location})\s*$'
-target = "unit"
+output_col = "unit"
 skip_if_filled = true
 
 # --- Direction ---
@@ -116,22 +184,22 @@ skip_if_filled = true
 type = "extract"
 label = "post_direction"
 pattern = '(?<!^)\b({direction})\s*$'
-target = "post_direction"
+output_col = "post_direction"
 skip_if_filled = true
 
 # --- Suffix ---
 [[step]]
 type = "extract"
 label = "suffix_common"
-pattern = '(?<!^)\b({suffix_common})\s*$'
-target = "suffix"
+pattern = '(?<!^)\b({suffix:common})\s*$'
+output_col = "suffix"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
 label = "suffix_all"
-pattern = '(?<!^)\b({suffix_all})\s*$'
-target = "suffix"
+pattern = '(?<!^)\b({suffix})\s*$'
+output_col = "suffix"
 skip_if_filled = true
 
 # --- Pre-direction ---
@@ -139,15 +207,15 @@ skip_if_filled = true
 type = "extract"
 label = "pre_direction"
 pattern = '^\b({direction})\b(?!$)'
-target = "pre_direction"
+output_col = "pre_direction"
 skip_if_filled = true
 
 # --- Street name cleanup ---
 [[step]]
 type = "rewrite"
-label = "street_name_abbr"
-pattern = '\b({street_name_abbr$short})\b'
-table = "street_name_abbr"
+label = "street_name"
+pattern = '\b({street_name})\b'
+table = "street_name"
 
 [[step]]
 type = "rewrite"
@@ -158,68 +226,67 @@ replacement = 'SAINT'
 # --- Post-extraction cleanup ---
 [[step]]
 type = "rewrite"
-label = "strip_unit_hash"
-pattern = '^#\s*'
+label = "strip_zeros_street_number"
+pattern = '^0+(?=\d)'
 replacement = ''
-source = "unit"
+input_col = "street_number"
 
 [[step]]
 type = "rewrite"
-label = "strip_leading_zeros_street_number"
+label = "strip_zeros_unit"
 pattern = '^0+(?=\d)'
 replacement = ''
-source = "street_number"
-
-[[step]]
-type = "rewrite"
-label = "strip_leading_zeros_unit"
-pattern = '^0+(?=\d)'
-replacement = ''
-source = "unit"
+input_col = "unit"
 
 [[step]]
 type = "extract"
-label = "trailing_number_to_street_number"
+label = "move_number_to_street_number"
 pattern = '\b(\d{1,3})\s*$'
-target = "street_number"
+output_col = "street_number"
 skip_if_filled = true
 
 [[step]]
 type = "extract"
-label = "promote_unit_to_street_number"
+label = "move_unit_to_street_number"
 pattern = '^.+$'
-source = "unit"
-target = "street_number"
+input_col = "unit"
+output_col = "street_number"
 skip_if_filled = true
 
 # --- Standardization ---
 [[step]]
-type = "standardize"
+type = "rewrite"
 label = "standardize_pre_direction"
-target = "pre_direction"
+input_col = "pre_direction"
 table = "direction"
 
 [[step]]
-type = "standardize"
+type = "rewrite"
 label = "standardize_post_direction"
-target = "post_direction"
+input_col = "post_direction"
 table = "direction"
 
 [[step]]
-type = "standardize"
+type = "rewrite"
 label = "standardize_suffix"
-target = "suffix"
-table = "suffix_all"
+input_col = "suffix"
+table = "suffix"
 
 [[step]]
-type = "standardize"
+type = "rewrite"
 label = "standardize_unit_location"
-target = "unit"
+input_col = "unit"
 table = "unit_location"
 
 [[step]]
-type = "standardize"
-label = "standardize_po_box"
-target = "po_box"
-pattern = '(?:P\W*O\W*BO?X|POB)\W*(\w+)'
-replacement = 'PO BOX $1'
+type = "rewrite"
+label = "standardize_state"
+input_col = "state"
+table = "state"
+
+[[step]]
+type = "rewrite"
+label = "standardize_building_type"
+input_col = "building_type"
+pattern = '.+'
+replacement = 'BUILDING'

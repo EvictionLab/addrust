@@ -45,7 +45,7 @@ const ORDINAL_TENS: &[&str] = &[
 
 /// Converts 1–999 to English cardinal words (e.g. 342 → "THREE HUNDRED FORTY TWO").
 pub fn cardinal(n: u16) -> String {
-    assert!(n >= 1 && n <= 999, "cardinal: n must be 1–999, got {n}");
+    assert!((1..=999).contains(&n), "cardinal: n must be 1–999, got {n}");
 
     let hundreds = (n / 100) as usize;
     let remainder = (n % 100) as usize;
@@ -76,7 +76,7 @@ pub fn cardinal(n: u16) -> String {
 
 /// Converts 1–999 to English ordinal words (e.g. 342 → "THREEHUNDREDFORTYSECOND").
 pub fn ordinal(n: u16) -> String {
-    assert!(n >= 1 && n <= 999, "ordinal: n must be 1–999, got {n}");
+    assert!((1..=999).contains(&n), "ordinal: n must be 1–999, got {n}");
 
     let hundreds = (n / 100) as usize;
     let remainder = (n % 100) as usize;
@@ -119,8 +119,8 @@ pub fn ordinal(n: u16) -> String {
 ///           1/4 → "ONE FOURTH", 3/4 → "THREE FOURTHS",
 ///           1/8 → "ONE EIGHTH", 5/8 → "FIVE EIGHTHS".
 pub fn fraction(num: u16, den: u16) -> String {
-    assert!(num >= 1 && num <= 999, "fraction: numerator must be 1–999, got {num}");
-    assert!(den >= 2 && den <= 999, "fraction: denominator must be 2–999, got {den}");
+    assert!((1..=999).contains(&num), "fraction: numerator must be 1–999, got {num}");
+    assert!((2..=999).contains(&den), "fraction: denominator must be 2–999, got {den}");
 
     let num_word = cardinal(num);
 
@@ -150,11 +150,13 @@ pub fn build_number_tables() -> (AbbrTable, AbbrTable) {
             short: n.to_string(),
             long: cardinal(n),
             variants: vec![],
+            tags: vec![],
         });
         ordinal_groups.push(AbbrGroup {
             short: n.to_string(),
             long: ordinal(n),
             variants: vec![],
+            tags: vec![],
         });
     }
 

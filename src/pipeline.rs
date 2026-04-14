@@ -5,15 +5,6 @@ use crate::ops::squish;
 use crate::prepare;
 use crate::tables::abbreviations::Abbreviations;
 
-/// Summary of a step for display purposes.
-#[derive(Debug)]
-pub struct StepSummary {
-    pub label: String,
-    pub step_type: String,
-    pub pattern_template: Option<String>,
-    pub enabled: bool,
-}
-
 /// The parsing pipeline — an ordered sequence of steps.
 pub struct Pipeline {
     steps: Vec<crate::step::Step>,
@@ -24,15 +15,10 @@ pub struct Pipeline {
 impl Pipeline {
     /// Build pipeline from a Config (file-based configuration).
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::from_steps_config(config)
-    }
-
-    /// Build a step-based pipeline from a Config (file-based configuration).
-    pub fn from_steps_config(config: &crate::config::Config) -> Self {
         use crate::step::{compile_step, compile_steps, StepsDef};
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
 
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let tables = if config.dictionaries.is_empty() {
             tables
         } else {
@@ -43,20 +29,29 @@ impl Pipeline {
         let mut defs: StepsDef = toml::from_str(toml_str)
             .expect("Failed to parse default steps.toml");
 
-        // Apply pattern overrides from config
+        // Apply step_overrides from config, tracking label renames
+        let mut label_renames: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for def in &mut defs.step {
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                let old_label = def.label.clone();
+                step_override.apply_to(def);
+                if def.label != old_label {
+                    label_renames.insert(old_label, def.label.clone());
+                }
             }
         }
 
         let mut steps = compile_steps(&defs.step, &tables);
 
-        // Compile and append custom steps (with pattern overrides applied)
+        // Compile and append custom steps (with step_overrides applied)
         for custom_def in &config.steps.custom_steps {
             let mut def = custom_def.clone();
-            if let Some(override_pattern) = config.steps.pattern_overrides.get(&def.label) {
-                def.pattern = Some(override_pattern.clone());
+            if let Some(step_override) = config.steps.step_overrides.get(&def.label) {
+                let old_label = def.label.clone();
+                step_override.apply_to(&mut def);
+                if def.label != old_label {
+                    label_renames.insert(old_label, def.label.clone());
+                }
             }
             match compile_step(&def, &tables) {
                 Ok(step) => steps.push(step),
@@ -64,9 +59,11 @@ impl Pipeline {
             }
         }
 
-        // Apply step_order reordering
+        // Apply step_order reordering (resolving any label renames from overrides)
         if !config.steps.step_order.is_empty() {
-            let order = &config.steps.step_order;
+            let order: Vec<String> = config.steps.step_order.iter()
+                .map(|l| label_renames.get(l).cloned().unwrap_or_else(|| l.clone()))
+                .collect();
             // Build position map: label -> index in step_order
             let pos_map: std::collections::HashMap<&str, usize> = order
                 .iter()
@@ -89,9 +86,12 @@ impl Pipeline {
             steps.extend(unordered);
         }
 
-        // Apply disabled list
+        // Apply disabled list (resolving any label renames from overrides)
+        let disabled: Vec<String> = config.steps.disabled.iter()
+            .map(|l| label_renames.get(l).cloned().unwrap_or_else(|| l.clone()))
+            .collect();
         for step in &mut steps {
-            if config.steps.disabled.contains(&step.label().to_string()) {
+            if disabled.contains(&step.label().to_string()) {
                 step.set_enabled(false);
             }
         }
@@ -105,10 +105,10 @@ impl Pipeline {
 
     /// Build a pipeline using the step-based parse path with default tables and steps.
     pub fn from_steps_default() -> Self {
-        use crate::tables::abbreviations::build_default_tables;
+        use crate::tables::abbreviations::load_default_tables;
         use crate::step::{compile_steps, StepsDef};
 
-        let tables = build_default_tables();
+        let tables = load_default_tables();
         let toml_str = include_str!("../data/defaults/steps.toml");
         let defs: StepsDef = toml::from_str(toml_str)
             .expect("Failed to parse default steps.toml");
@@ -121,14 +121,9 @@ impl Pipeline {
         }
     }
 
-    /// Get metadata about all steps for display purposes.
-    pub fn step_summaries(&self) -> Vec<StepSummary> {
-        self.steps.iter().map(|s| StepSummary {
-            label: s.label().to_string(),
-            step_type: s.step_type().to_string(),
-            pattern_template: s.pattern_template().map(|p| p.to_string()),
-            enabled: s.enabled(),
-        }).collect()
+    /// Access the compiled steps.
+    pub fn steps(&self) -> &[crate::step::Step] {
+        &self.steps
     }
 
     /// Parse a single address string.
@@ -216,8 +211,8 @@ disabled = ["suffix_common", "suffix_all"]
     #[test]
     fn test_config_pattern_override() {
         let toml_str = r#"
-[steps.pattern_overrides]
-unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
+[steps.step_overrides.unit_type_value]
+pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
@@ -228,10 +223,7 @@ unit_type_value = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
     #[test]
     fn test_config_dict_override() {
         let toml_str = r#"
-[dictionaries.suffix_all]
-add = [{ short = "PSGE", long = "PASSAGE" }]
-
-[dictionaries.suffix_common]
+[dictionaries.suffix]
 add = [{ short = "PSGE", long = "PASSAGE" }]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
@@ -277,10 +269,10 @@ add = [{ short = "PSGE", long = "PASSAGE" }]
     #[test]
     fn test_step_summaries() {
         let p = Pipeline::default();
-        let summaries = p.step_summaries();
-        assert!(!summaries.is_empty());
-        assert_eq!(summaries[0].step_type, "rewrite");
-        assert_eq!(summaries[0].label, "na_check");
+        let steps = p.steps();
+        assert!(!steps.is_empty());
+        assert_eq!(steps[0].step_type(), "rewrite");
+        assert_eq!(steps[0].label(), "fix_ampersand");
     }
 
     #[test]
@@ -291,11 +283,10 @@ step_order = ["pre_direction", "suffix_common", "na_check"]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        let summaries = p.step_summaries();
-        // First three should be reordered
-        assert_eq!(summaries[0].label, "pre_direction");
-        assert_eq!(summaries[1].label, "suffix_common");
-        assert_eq!(summaries[2].label, "na_check");
+        let steps = p.steps();
+        assert_eq!(steps[0].label(), "pre_direction");
+        assert_eq!(steps[1].label(), "suffix_common");
+        assert_eq!(steps[2].label(), "na_check");
     }
 
     #[test]
@@ -306,47 +297,81 @@ step_order = ["nonexistent", "na_check", "po_box"]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        let summaries = p.step_summaries();
-        // na_check and po_box should be first two (nonexistent ignored)
-        assert_eq!(summaries[0].label, "na_check");
-        assert_eq!(summaries[1].label, "po_box");
+        let steps = p.steps();
+        assert_eq!(steps[0].label(), "na_check");
+        assert_eq!(steps[1].label(), "po_box");
     }
 
     #[test]
     fn test_config_step_order_missing_labels_appended() {
-        // Only specify a partial order — remaining steps keep relative default order
         let toml_str = r#"
 [steps]
 step_order = ["suffix_common", "na_check"]
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        let summaries = p.step_summaries();
-        assert_eq!(summaries[0].label, "suffix_common");
-        assert_eq!(summaries[1].label, "na_check");
-        // Remaining steps should follow in their default relative order
-        assert_eq!(summaries[2].label, "city_state_zip");
-        assert_eq!(summaries[3].label, "po_box");
+        let steps = p.steps();
+        assert_eq!(steps[0].label(), "suffix_common");
+        assert_eq!(steps[1].label(), "na_check");
+        assert_eq!(steps[2].label(), "fix_ampersand");
+        let labels: Vec<&str> = steps.iter().map(|s| s.label()).collect();
+        let csz_pos = labels.iter().position(|l| *l == "city_state_zip").unwrap();
+        let po_box_pos = labels.iter().position(|l| *l == "po_box").unwrap();
+        assert!(csz_pos < po_box_pos);
     }
 
     #[test]
     fn test_step_order_with_disabled_and_overrides() {
-        // Combine all three config features
         let toml_str = r#"
 [steps]
 disabled = ["na_check"]
 step_order = ["po_box", "na_check", "city_state_zip"]
 
-[steps.pattern_overrides]
-po_box = '(?i)P\.?\s*O\.?\s*BOX\s+(\w+)'
+[steps.step_overrides.po_box]
+pattern = '(?i)P\.?\s*O\.?\s*BOX\s+(\w+)'
 "#;
         let config: crate::config::Config = toml::from_str(toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        let summaries = p.step_summaries();
-        // po_box first, na_check second (disabled), city_state_zip third
-        assert_eq!(summaries[0].label, "po_box");
-        assert_eq!(summaries[1].label, "na_check");
-        assert!(!summaries[1].enabled); // na_check is disabled
-        assert_eq!(summaries[2].label, "city_state_zip");
+        let steps = p.steps();
+        assert_eq!(steps[0].label(), "po_box");
+        assert_eq!(steps[1].label(), "na_check");
+        assert!(!steps[1].enabled()); // na_check is disabled
+        assert_eq!(steps[2].label(), "city_state_zip");
+    }
+
+    #[test]
+    fn test_label_rename_updates_step_order() {
+        // Override renames unit_fraction -> street_number_unit_fraction.
+        // step_order uses the OLD label — code should resolve the rename.
+        let toml_str = r#"
+[steps]
+step_order = ["unit_fraction", "street_number"]
+
+[steps.step_overrides.unit_fraction]
+label = "street_number_unit_fraction"
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let steps = p.steps();
+        assert_eq!(steps[0].label(), "street_number_unit_fraction");
+        assert_eq!(steps[1].label(), "street_number");
+    }
+
+    #[test]
+    fn test_label_rename_updates_disabled() {
+        // Override renames na_check -> na_check_v2.
+        // disabled list uses the OLD label — code should resolve the rename.
+        let toml_str = r#"
+[steps]
+disabled = ["na_check"]
+
+[steps.step_overrides.na_check]
+label = "na_check_v2"
+"#;
+        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+        let p = Pipeline::from_config(&config);
+        let steps = p.steps();
+        let na_step = steps.iter().find(|s| s.label() == "na_check_v2").unwrap();
+        assert!(!na_step.enabled());
     }
 }

@@ -1,19 +1,65 @@
-/// The parsed result of an address string.
-/// Each field is `None` until extracted by a pipeline step.
-#[derive(Debug, Default, Clone)]
-pub struct Address {
-    pub street_number: Option<String>,
-    pub pre_direction: Option<String>,
-    pub street_name: Option<String>,
-    pub suffix: Option<String>,
-    pub post_direction: Option<String>,
-    pub unit: Option<String>,
-    pub unit_type: Option<String>,
-    pub po_box: Option<String>,
-    pub building: Option<String>,
-    pub extra_front: Option<String>,
-    pub extra_back: Option<String>,
-    pub warnings: Vec<String>,
+/// Declare all address columns in one place.
+/// Generates: Address struct fields, Col enum, field()/field_mut(), COL_DEFS.
+macro_rules! define_columns {
+    ( $( $variant:ident, $field:ident, $key:literal, $label:literal );+ $(;)? ) => {
+        /// The parsed result of an address string.
+        /// Each field is `None` until extracted by a pipeline step.
+        #[derive(Debug, Default, Clone)]
+        pub struct Address {
+            $( pub $field: Option<String>, )+
+            pub warnings: Vec<String>,
+        }
+
+        /// Which column of a parsed address a step targets.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum Col {
+            $( $variant, )+
+        }
+
+        pub struct ColDef {
+            pub col: Col,
+            pub key: &'static str,
+            pub label: &'static str,
+        }
+
+        pub const COL_DEFS: &[ColDef] = &[
+            $( ColDef { col: Col::$variant, key: $key, label: $label }, )+
+        ];
+
+        impl Address {
+            /// Get a mutable reference to a field by enum variant.
+            pub fn field_mut(&mut self, col: Col) -> &mut Option<String> {
+                match col {
+                    $( Col::$variant => &mut self.$field, )+
+                }
+            }
+
+            /// Get a reference to a field by enum variant.
+            pub fn field(&self, col: Col) -> &Option<String> {
+                match col {
+                    $( Col::$variant => &self.$field, )+
+                }
+            }
+        }
+    };
+}
+
+define_columns! {
+    StreetNumber,  street_number,  "street_number",  "Street Number";
+    PreDirection,  pre_direction,  "pre_direction",  "Pre-Direction";
+    StreetName,    street_name,    "street_name",    "Street Name";
+    Suffix,        suffix,         "suffix",         "Suffix";
+    PostDirection, post_direction, "post_direction",  "Post-Direction";
+    Unit,          unit,           "unit",           "Unit";
+    UnitType,      unit_type,      "unit_type",      "Unit Type";
+    PoBox,         po_box,         "po_box",         "PO Box";
+    Building,      building,       "building",       "Building";
+    BuildingType,  building_type,  "building_type",  "Building Type";
+    ExtraFront,    extra_front,    "extra_front",    "Extra Front";
+    ExtraBack,     extra_back,     "extra_back",     "Extra Back";
+    City,          city,           "city",           "City";
+    State,         state,          "state",          "State";
+    Zip,           zip,            "zip",            "Zip";
 }
 
 impl Address {
@@ -55,56 +101,23 @@ impl Address {
             Some(parts.join(" "))
         }
     }
-
-    /// Get a mutable reference to a field by enum variant.
-    pub fn field_mut(&mut self, field: Field) -> &mut Option<String> {
-        match field {
-            Field::StreetNumber => &mut self.street_number,
-            Field::PreDirection => &mut self.pre_direction,
-            Field::StreetName => &mut self.street_name,
-            Field::Suffix => &mut self.suffix,
-            Field::PostDirection => &mut self.post_direction,
-            Field::Unit => &mut self.unit,
-            Field::UnitType => &mut self.unit_type,
-            Field::PoBox => &mut self.po_box,
-            Field::Building => &mut self.building,
-            Field::ExtraFront => &mut self.extra_front,
-            Field::ExtraBack => &mut self.extra_back,
-        }
-    }
-
-    /// Get a reference to a field by enum variant.
-    pub fn field(&self, field: Field) -> &Option<String> {
-        match field {
-            Field::StreetNumber => &self.street_number,
-            Field::PreDirection => &self.pre_direction,
-            Field::StreetName => &self.street_name,
-            Field::Suffix => &self.suffix,
-            Field::PostDirection => &self.post_direction,
-            Field::Unit => &self.unit,
-            Field::UnitType => &self.unit_type,
-            Field::PoBox => &self.po_box,
-            Field::Building => &self.building,
-            Field::ExtraFront => &self.extra_front,
-            Field::ExtraBack => &self.extra_back,
-        }
-    }
 }
 
-/// Which field of an Address a step targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Field {
-    StreetNumber,
-    PreDirection,
-    StreetName,
-    Suffix,
-    PostDirection,
-    Unit,
-    UnitType,
-    PoBox,
-    Building,
-    ExtraFront,
-    ExtraBack,
+impl Col {
+    pub fn from_key(key: &str) -> Result<Col, String> {
+        COL_DEFS.iter()
+            .find(|d| d.key == key)
+            .map(|d| d.col)
+            .ok_or_else(|| format!("Unknown column name: {}", key))
+    }
+
+    pub fn key(&self) -> &'static str {
+        COL_DEFS.iter().find(|d| d.col == *self).unwrap().key
+    }
+
+    pub fn label(&self) -> &'static str {
+        COL_DEFS.iter().find(|d| d.col == *self).unwrap().label
+    }
 }
 
 /// Mutable state during parsing.
@@ -117,18 +130,30 @@ pub struct AddressState {
 }
 
 impl AddressState {
-    pub fn new(input: &str) -> Self {
-        Self {
-            working: input.to_uppercase(),
-            fields: Address::default(),
-        }
-    }
-
     /// Create from an already-prepared (uppercased, cleaned) string.
     pub fn new_from_prepared(prepared: String) -> Self {
         Self {
             working: prepared,
             fields: Address::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_col_from_key_roundtrip() {
+        for def in COL_DEFS {
+            assert_eq!(Col::from_key(def.key).unwrap(), def.col);
+            assert_eq!(def.col.label(), def.label);
+            assert_eq!(def.col.key(), def.key);
+        }
+    }
+
+    #[test]
+    fn test_col_from_key_unknown() {
+        assert!(Col::from_key("nonsense").is_err());
     }
 }
