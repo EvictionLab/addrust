@@ -261,11 +261,16 @@ impl AbbrTable {
                         group.variants.push(v.clone());
                     }
                 }
-                // Merge tags from entry
-                for t in &entry.tags {
-                    let upper = t.to_uppercase();
-                    if !group.tags.contains(&upper) {
-                        group.tags.push(upper);
+                if is_canonical {
+                    // Canonical entries replace tags entirely
+                    group.tags = entry.tags.iter().map(|t| t.to_uppercase()).collect();
+                } else if !entry.tags.is_empty() {
+                    // Non-canonical entries merge tags additively
+                    for t in &entry.tags {
+                        let upper = t.to_uppercase();
+                        if !group.tags.contains(&upper) {
+                            group.tags.push(upper);
+                        }
                     }
                 }
                 if is_canonical {
