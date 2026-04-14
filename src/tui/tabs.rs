@@ -327,6 +327,32 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                 }));
             }
         }
+        // Toggle 'common' tag on selected entry
+        KeyCode::Char('t') => {
+            if let Some(i) = app.dict_list_state.selected() {
+                let entries = app.current_dict_entries_mut();
+                if i < entries.len() {
+                    let entry = &mut entries[i];
+                    let tag = "common".to_string();
+                    if entry.tags.contains(&tag) {
+                        entry.tags.retain(|t| t != &tag);
+                    } else {
+                        entry.tags.push(tag);
+                    }
+                    if entry.tags != entry.original_tags {
+                        entry.status = GroupStatus::Modified;
+                    } else if entry.status == GroupStatus::Modified {
+                        if entry.short == entry.original_short
+                            && entry.long == entry.original_long
+                            && entry.variants == entry.original_variants
+                        {
+                            entry.status = GroupStatus::Default;
+                        }
+                    }
+                    app.dirty = true;
+                }
+            }
+        }
         // Edit entry via panel, focused on long form
         KeyCode::Char('e') => {
             if let Some(i) = app.dict_list_state.selected() {
