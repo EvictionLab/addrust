@@ -2,6 +2,10 @@
 name = "addrust"
 version = "0.1.0"
 edition = "2024"
+authors = ["EvictionLab", "Sarah Johnson (sj-io)"]
+description = "A fast, configurable, table-driven address parser for US addresses"
+license = "MIT"
+repository = "https://github.com/EvictionLab/addrust"
 
 [dependencies]
 regex = "1"
