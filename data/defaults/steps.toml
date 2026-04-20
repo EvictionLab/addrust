@@ -213,6 +213,12 @@ skip_if_filled = true
 # --- Street name cleanup ---
 [[step]]
 type = "rewrite"
+label = "street_name_start"
+pattern = '^({street_name:start})\b'
+table = "street_name"
+
+[[step]]
+type = "rewrite"
 label = "street_name"
 pattern = '\b({street_name})\b'
 table = "street_name"

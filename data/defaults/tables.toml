@@ -121,7 +121,7 @@ groups = [
 
 [street_name]
 groups = [
-  { short = "MT",  long = "MOUNT", variants = [] },
-  { short = "FT",  long = "FORT",  variants = [] },
+  { short = "MT",  long = "MOUNT", variants = [], tags = ["start"] },
+  { short = "FT",  long = "FORT",  variants = [], tags = ["start"] },
   { short = "MLK", long = "MARTIN LUTHER KING", variants = ['(?:(?:DR|DOCTOR)\W*)?M(?:ARTIN)?\W*L(?:UTHER)?\W*K(?:ING)?(?:\W+(?:JR|JUNIOR))?'] },
 ]
