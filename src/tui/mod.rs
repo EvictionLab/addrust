@@ -191,12 +191,12 @@ impl App {
                             short: g.short.clone(),
                             long,
                             variants,
-                            tags: vec![],
+                            tags: g.tags.clone(),
                             status,
                             original_short: g.short.clone(),
                             original_long: g.long.clone(),
                             original_variants: g.variants.clone(),
-                            original_tags: vec![],
+                            original_tags: g.tags.clone(),
                         }
                     })
                     .collect();
@@ -215,13 +215,27 @@ impl App {
                                     e.variants.push(v.clone());
                                 }
                             }
+                            // Merge tags
+                            for t in &add.tags {
+                                if !e.tags.contains(t) {
+                                    e.tags.push(t.clone());
+                                }
+                            }
+                            // Update long form if overridden
+                            if !long.is_empty() && e.long != long {
+                                e.long = long.clone();
+                            }
+                            // Update originals to match merged state (for change detection)
+                            e.original_variants = e.variants.clone();
+                            e.original_tags = e.tags.clone();
+                            e.original_long = e.long.clone();
                             e.status = GroupStatus::Modified;
                         } else {
                             entries.push(DictGroupState {
                                 short: short.clone(),
                                 long: long.clone(),
                                 variants: add.variants.clone(),
-                                tags: vec![],
+                                tags: add.tags.clone(),
                                 status: GroupStatus::Added,
                                 original_short: short,
                                 original_long: long,
@@ -362,7 +376,6 @@ impl App {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
                             variants: entry.variants.clone(),
-                            canonical: None,
                             tags: entry.tags.clone(),
                         });
                     }
@@ -374,7 +387,6 @@ impl App {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
                             variants: entry.variants.clone(),
-                            canonical: Some(true),
                             tags: entry.tags.clone(),
                         });
                     }
@@ -775,10 +787,9 @@ mod tests {
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
-            // Modified entries go to add with canonical: Some(true)
+            // Modified entries go to add (short-form matching infers replacement vs addition)
             assert_eq!(overrides.add.len(), 1);
             assert_eq!(overrides.add[0].long, "CHANGED");
-            assert_eq!(overrides.add[0].canonical, Some(true));
         }
     }
 
