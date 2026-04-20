@@ -165,82 +165,79 @@ impl App {
         let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
             .map(|name| {
-                let table = default_tables.get(name).unwrap();
+                let default_table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
-                let mut entries: Vec<DictGroupState> = table
-                    .groups
-                    .iter()
-                    .map(|g| {
-                        let mut status = GroupStatus::Default;
-                        let long = g.long.clone();
-                        let variants = g.variants.clone();
+                // Build default lookup: short -> group
+                let default_map: std::collections::HashMap<&str, &crate::tables::abbreviations::AbbrGroup> =
+                    default_table.groups.iter()
+                        .map(|g| (g.short.as_str(), g))
+                        .collect();
 
-                        if let Some(ov) = overrides {
-                            // Check if removed
-                            let is_removed = ov.remove.iter().any(|r| {
-                                let upper = r.to_uppercase();
-                                g.short == upper || g.long == upper
-                            });
-                            if is_removed {
-                                status = GroupStatus::Removed;
-                            }
-                        }
+                // Patch defaults with config overrides
+                let patched = match overrides {
+                    Some(ov) => default_table.patch(ov),
+                    None => default_table.clone(),
+                };
+
+                // Build entries with status from patched table
+                let mut entries: Vec<DictGroupState> = patched.groups.iter()
+                    .map(|g| {
+                        let (status, orig_short, orig_long, orig_variants, orig_tags) =
+                            if let Some(default_group) = default_map.get(g.short.as_str()) {
+                                // Exists in defaults — check if identical
+                                let is_same = g.long == default_group.long
+                                    && g.variants == default_group.variants
+                                    && g.tags == default_group.tags;
+                                if is_same {
+                                    (GroupStatus::Default,
+                                     default_group.short.clone(), default_group.long.clone(),
+                                     default_group.variants.clone(), default_group.tags.clone())
+                                } else {
+                                    (GroupStatus::Modified,
+                                     default_group.short.clone(), default_group.long.clone(),
+                                     default_group.variants.clone(), default_group.tags.clone())
+                                }
+                            } else {
+                                // Not in defaults — added by config
+                                (GroupStatus::Added,
+                                 g.short.clone(), g.long.clone(),
+                                 g.variants.clone(), g.tags.clone())
+                            };
 
                         DictGroupState {
                             short: g.short.clone(),
-                            long,
-                            variants,
+                            long: g.long.clone(),
+                            variants: g.variants.clone(),
                             tags: g.tags.clone(),
                             status,
-                            original_short: g.short.clone(),
-                            original_long: g.long.clone(),
-                            original_variants: g.variants.clone(),
-                            original_tags: g.tags.clone(),
+                            original_short: orig_short,
+                            original_long: orig_long,
+                            original_variants: orig_variants,
+                            original_tags: orig_tags,
                         }
                     })
                     .collect();
 
-                // Append added entries from config
+                // Add removed entries for display (from config remove list vs defaults)
                 if let Some(ov) = overrides {
-                    for add in &ov.add {
-                        let short = add.short.to_uppercase();
-                        let long = add.long.to_uppercase();
-                        // Check if this add merges into an existing group
-                        let existing = entries.iter_mut().find(|e| e.short == short);
-                        if let Some(e) = existing {
-                            // Merge variants
-                            for v in &add.variants {
-                                if !e.variants.contains(v) {
-                                    e.variants.push(v.clone());
-                                }
-                            }
-                            // Merge tags
-                            for t in &add.tags {
-                                if !e.tags.contains(t) {
-                                    e.tags.push(t.clone());
-                                }
-                            }
-                            // Update long form if overridden
-                            if !long.is_empty() && e.long != long {
-                                e.long = long.clone();
-                            }
-                            // Update originals to match merged state (for change detection)
-                            e.original_variants = e.variants.clone();
-                            e.original_tags = e.tags.clone();
-                            e.original_long = e.long.clone();
-                            e.status = GroupStatus::Modified;
-                        } else {
+                    for remove_val in &ov.remove {
+                        let upper = remove_val.to_uppercase();
+                        // Find the default group that was removed
+                        if let Some(default_group) = default_table.groups.iter().find(|g| {
+                            g.short == upper || g.long == upper
+                                || g.variants.iter().any(|v| v.to_uppercase() == upper)
+                        }) {
                             entries.push(DictGroupState {
-                                short: short.clone(),
-                                long: long.clone(),
-                                variants: add.variants.clone(),
-                                tags: add.tags.clone(),
-                                status: GroupStatus::Added,
-                                original_short: short,
-                                original_long: long,
-                                original_variants: Vec::new(),
-                                original_tags: Vec::new(),
+                                short: default_group.short.clone(),
+                                long: default_group.long.clone(),
+                                variants: default_group.variants.clone(),
+                                tags: default_group.tags.clone(),
+                                status: GroupStatus::Removed,
+                                original_short: default_group.short.clone(),
+                                original_long: default_group.long.clone(),
+                                original_variants: default_group.variants.clone(),
+                                original_tags: default_group.tags.clone(),
                             });
                         }
                     }
