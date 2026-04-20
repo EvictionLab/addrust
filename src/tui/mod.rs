@@ -368,7 +368,7 @@ impl App {
 
             for entry in entries {
                 match entry.status {
-                    GroupStatus::Added => {
+                    GroupStatus::Added | GroupStatus::Modified => {
                         overrides.add.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
@@ -378,14 +378,6 @@ impl App {
                     }
                     GroupStatus::Removed => {
                         overrides.remove.push(entry.short.clone());
-                    }
-                    GroupStatus::Modified => {
-                        overrides.add.push(DictEntry {
-                            short: entry.short.clone(),
-                            long: entry.long.clone(),
-                            variants: entry.variants.clone(),
-                            tags: entry.tags.clone(),
-                        });
                     }
                     GroupStatus::Default => {}
                 }
