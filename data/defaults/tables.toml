@@ -1,21 +1,21 @@
 [direction]
 groups = [
-  { short = "NE", long = "NORTHEAST", variants = [] },
-  { short = "NW", long = "NORTHWEST", variants = [] },
-  { short = "SE", long = "SOUTHEAST", variants = [] },
-  { short = "SW", long = "SOUTHWEST", variants = [] },
-  { short = "N",  long = "NORTH",     variants = [] },
-  { short = "S",  long = "SOUTH",     variants = [] },
+  { short = "NE", long = "NORTHEAST", variants = ["N E"] },
+  { short = "NW", long = "NORTHWEST", variants = ["N W"] },
+  { short = "SE", long = "SOUTHEAST", variants = ["S E"] },
+  { short = "SW", long = "SOUTHWEST", variants = ["S W"] },
+  { short = "N",  long = "NORTH",     variants = ['(?<=\d )NO'] },
+  { short = "S",  long = "SOUTH",     variants = ["SO"] },
   { short = "E",  long = "EAST",      variants = [] },
-  { short = "W",  long = "WEST",      variants = [] },
+  { short = "W",  long = "WEST",      variants = ["WST"] },
 ]
 
 [unit_type]
 groups = [
-  { short = "APT",       long = "APARTMENT",  variants = [] },
+  { short = "APT",       long = "APARTMENT",  variants = ["APARMENT", "APRTMENT", "APRT", "APTS"] },
   { short = "UNIT",      long = "UNIT",        variants = [] },
-  { short = "STE",       long = "SUITE",       variants = [] },
-  { short = "FL",        long = "FLOOR",       variants = [] },
+  { short = "STE",       long = "SUITE",       variants = ["SUITES"] },
+  { short = "FL",        long = "FLOOR",       variants = ["FLR"] },
   { short = "FLT",       long = "FLAT",        variants = [] },
   { short = "RM",        long = "ROOM",        variants = [] },
   { short = "PH",        long = "PENTHOUSE",   variants = [] },
@@ -24,7 +24,7 @@ groups = [
   { short = "DUPLEX",    long = "DUPLEX",      variants = [] },
   { short = "ATTIC",     long = "ATTIC",       variants = [] },
   { short = "BSMT",      long = "BASEMENT",    variants = [] },
-  { short = "LOT",       long = "LOT",         variants = [] },
+  { short = "LOT",       long = "LOT",         variants = ["LT"] },
   { short = "LVL",       long = "LEVEL",       variants = [] },
   { short = "OFC",       long = "OFFICE",      variants = [] },
   { short = "NUM",       long = "NUMBER",      variants = ["NO"] },
@@ -121,7 +121,14 @@ groups = [
 
 [street_name]
 groups = [
-  { short = "MT",  long = "MOUNT", variants = [], tags = ["start"] },
-  { short = "FT",  long = "FORT",  variants = [], tags = ["start"] },
-  { short = "MLK", long = "MARTIN LUTHER KING", variants = ['(?:(?:DR|DOCTOR)\W*)?M(?:ARTIN)?\W*L(?:UTHER)?\W*K(?:ING)?(?:\W+(?:JR|JUNIOR))?'] },
+  { short = "MT",         long = "MOUNT",       variants = [], tags = ["start"] },
+  { short = "FT",         long = "FORT",        variants = [], tags = ["start"] },
+  { short = "ST",         long = "SAINT",       variants = [], tags = ["start"] },
+  { short = "MLK",        long = "MARTIN LUTHER KING", variants = ['(?:(?:DR|DOCTOR)\W*)?M(?:ARTIN)?\W*L(?:UTHER)?\W*K(?:ING)?(?:\W+(?:JR|JUNIOR))?'], tags = ["name"] },
+  { short = "HWY",        long = "HIGHWAY",     variants = ["HY"], tags = ["highway"] },
+  { short = "RTE",        long = "ROUTE",       variants = [], tags = ["highway"] },
+  { short = "FM RD",      long = "FARM ROAD",   variants = [], tags = ["highway"] },
+  { short = "CO RD",      long = "COUNTY ROAD", variants = [], tags = ["highway"] },
+  { short = "ST RD",      long = "STATE ROAD",  variants = [], tags = ["highway"] },
+  { short = "INTERSTATE", long = "INTERSTATE",  variants = [], tags = ["highway"] },
 ]
