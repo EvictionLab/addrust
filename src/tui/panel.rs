@@ -69,8 +69,6 @@ mod types {
         pub(crate) long: String,
         pub(crate) variants: Vec<(String, bool)>,  // (text, enabled)
         pub(crate) tags: Vec<(String, bool)>,       // (tag text, enabled)
-        /// Whether to show the Tags field (true when table has tagged entries).
-        pub(crate) has_tags: bool,
         /// Which field is focused: 0=short, 1=long, 2=variants, 3=tags.
         pub(crate) field_cursor: usize,
         /// Current focus.
@@ -93,9 +91,7 @@ mod types {
     }
 }
 
-fn dict_field_count(panel: &DictPanelState) -> u16 {
-    if panel.has_tags { 4 } else { 3 }
-}
+const DICT_FIELD_COUNT: u16 = 4;
 
 impl PanelKind {
     /// Number of content lines for the panel body (fields + dropdown + border + spacing).
@@ -113,7 +109,7 @@ impl PanelKind {
             PanelKind::Dict(panel) => {
                 let items = match panel.field_cursor {
                     2 => &panel.variants,
-                    3 if panel.has_tags => &panel.tags,
+                    3 => &panel.tags,
                     _ => &Vec::new(),
                 };
                 let dropdown = match &panel.focus {
@@ -125,7 +121,7 @@ impl PanelKind {
                     _ => 0,
                 };
                 // fields + dropdown + body border (2) + blank line (1)
-                dict_field_count(panel) + dropdown + 2 + 1
+                DICT_FIELD_COUNT + dropdown + 2 + 1
             }
         }
     }
@@ -824,10 +820,7 @@ pub(crate) fn render_dict_panel(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_dict_body(frame: &mut Frame, panel: &DictPanelState, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
-    let mut fields: Vec<&str> = vec!["Short form", "Long form", "Variants"];
-    if panel.has_tags {
-        fields.push("Tags");
-    }
+    let fields: [&str; 4] = ["Short form", "Long form", "Variants", "Tags"];
 
     for (i, &label) in fields.iter().enumerate() {
         let is_selected = panel.focus == PanelFocus::Navigating && panel.field_cursor == i;
@@ -950,7 +943,7 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
         _ => return,
     };
 
-    let field_count = dict_field_count(panel) as usize;
+    let field_count = DICT_FIELD_COUNT as usize;
 
     match panel.focus.clone() {
         PanelFocus::Navigating => {
@@ -1093,6 +1086,20 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn dict_entry_collides(
+    entries: &[super::tabs::DictGroupState],
+    short: &str,
+    long: &str,
+    exclude_index: Option<usize>,
+) -> bool {
+    entries.iter().enumerate().any(|(i, e)| {
+        Some(i) != exclude_index
+            && e.status != super::tabs::GroupStatus::Removed
+            && ((!short.is_empty() && e.short == short)
+                || (!long.is_empty() && e.long == long))
+    })
+}
+
 fn close_dict_panel(app: &mut App) {
     use super::tabs::{DictGroupState, GroupStatus};
 
@@ -1114,6 +1121,17 @@ fn close_dict_panel(app: &mut App) {
         ),
         _ => return,
     };
+
+    let exclude = if is_new { None } else { Some(entry_index) };
+    if dict_entry_collides(
+        app.current_dict_entries(),
+        &short.to_uppercase(),
+        &long.to_uppercase(),
+        exclude,
+    ) {
+        app.panel = None;
+        return;
+    }
 
     if is_new {
         if !short.is_empty() {

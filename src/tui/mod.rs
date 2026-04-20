@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
-use crate::tables::abbreviations::load_default_tables;
+use crate::tables::abbreviations::{AbbrGroup, load_default_tables};
 
 use tabs::{
     DictGroupState, GroupStatus, OutputSettingState, StepState,
@@ -165,68 +165,58 @@ impl App {
         let dict_entries: Vec<Vec<DictGroupState>> = table_names
             .iter()
             .map(|name| {
-                let table = default_tables.get(name).unwrap();
+                let default_table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
-                let mut entries: Vec<DictGroupState> = table
-                    .groups
-                    .iter()
+                let default_map: HashMap<&str, &AbbrGroup> = default_table.groups.iter()
+                    .map(|g| (g.short.as_str(), g))
+                    .collect();
+
+                let patched = match overrides {
+                    Some(ov) => default_table.patch(ov),
+                    None => default_table.clone(),
+                };
+
+                let mut entries: Vec<DictGroupState> = patched.groups.iter()
                     .map(|g| {
-                        let mut status = GroupStatus::Default;
-                        let long = g.long.clone();
-                        let variants = g.variants.clone();
-
-                        if let Some(ov) = overrides {
-                            // Check if removed
-                            let is_removed = ov.remove.iter().any(|r| {
-                                let upper = r.to_uppercase();
-                                g.short == upper || g.long == upper
-                            });
-                            if is_removed {
-                                status = GroupStatus::Removed;
-                            }
-                        }
-
+                        let default_group = default_map.get(g.short.as_str()).copied();
+                        let status = match default_group {
+                            Some(dg) if dg == g => GroupStatus::Default,
+                            Some(_) => GroupStatus::Modified,
+                            None => GroupStatus::Added,
+                        };
+                        let origin = default_group.unwrap_or(g);
                         DictGroupState {
                             short: g.short.clone(),
-                            long,
-                            variants,
-                            tags: vec![],
+                            long: g.long.clone(),
+                            variants: g.variants.clone(),
+                            tags: g.tags.clone(),
                             status,
-                            original_short: g.short.clone(),
-                            original_long: g.long.clone(),
-                            original_variants: g.variants.clone(),
-                            original_tags: vec![],
+                            original_short: origin.short.clone(),
+                            original_long: origin.long.clone(),
+                            original_variants: origin.variants.clone(),
+                            original_tags: origin.tags.clone(),
                         }
                     })
                     .collect();
 
-                // Append added entries from config
                 if let Some(ov) = overrides {
-                    for add in &ov.add {
-                        let short = add.short.to_uppercase();
-                        let long = add.long.to_uppercase();
-                        // Check if this add merges into an existing group
-                        let existing = entries.iter_mut().find(|e| e.short == short);
-                        if let Some(e) = existing {
-                            // Merge variants
-                            for v in &add.variants {
-                                if !e.variants.contains(v) {
-                                    e.variants.push(v.clone());
-                                }
-                            }
-                            e.status = GroupStatus::Modified;
-                        } else {
+                    for remove_val in &ov.remove {
+                        let upper = remove_val.to_uppercase();
+                        if let Some(g) = default_table.groups.iter().find(|g| {
+                            g.short == upper || g.long == upper
+                                || g.variants.iter().any(|v| v.to_uppercase() == upper)
+                        }) {
                             entries.push(DictGroupState {
-                                short: short.clone(),
-                                long: long.clone(),
-                                variants: add.variants.clone(),
-                                tags: vec![],
-                                status: GroupStatus::Added,
-                                original_short: short,
-                                original_long: long,
-                                original_variants: Vec::new(),
-                                original_tags: Vec::new(),
+                                short: g.short.clone(),
+                                long: g.long.clone(),
+                                variants: g.variants.clone(),
+                                tags: g.tags.clone(),
+                                status: GroupStatus::Removed,
+                                original_short: g.short.clone(),
+                                original_long: g.long.clone(),
+                                original_variants: g.variants.clone(),
+                                original_tags: g.tags.clone(),
                             });
                         }
                     }
@@ -357,26 +347,16 @@ impl App {
 
             for entry in entries {
                 match entry.status {
-                    GroupStatus::Added => {
+                    GroupStatus::Added | GroupStatus::Modified => {
                         overrides.add.push(DictEntry {
                             short: entry.short.clone(),
                             long: entry.long.clone(),
                             variants: entry.variants.clone(),
-                            canonical: None,
                             tags: entry.tags.clone(),
                         });
                     }
                     GroupStatus::Removed => {
                         overrides.remove.push(entry.short.clone());
-                    }
-                    GroupStatus::Modified => {
-                        overrides.add.push(DictEntry {
-                            short: entry.short.clone(),
-                            long: entry.long.clone(),
-                            variants: entry.variants.clone(),
-                            canonical: Some(true),
-                            tags: entry.tags.clone(),
-                        });
                     }
                     GroupStatus::Default => {}
                 }
@@ -702,7 +682,6 @@ mod tests {
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
             assert_eq!(overrides.remove.len(), 1);
-            // Remove now stores the short form (canonical key)
             assert_eq!(overrides.remove[0], app.dict_entries[0][0].short);
         }
     }
@@ -775,10 +754,8 @@ mod tests {
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
-            // Modified entries go to add with canonical: Some(true)
             assert_eq!(overrides.add.len(), 1);
             assert_eq!(overrides.add[0].long, "CHANGED");
-            assert_eq!(overrides.add[0].canonical, Some(true));
         }
     }
 

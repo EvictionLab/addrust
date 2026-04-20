@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// A group of abbreviation variants with one canonical short/long pair.
 /// Short and long are always stored uppercase. Variants are stored as-is
 /// (they may contain regex patterns where case matters).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbbrGroup {
     pub short: String,
     pub long: String,
@@ -219,11 +219,14 @@ impl AbbrTable {
         format!(r"(?:{})", parts.join("|"))
     }
 
-    /// Apply dictionary overrides: remove groups by any value match, then add/merge groups.
+    /// Apply dictionary overrides: remove matching groups, then replace or add.
+    ///
+    /// Config entries are complete rows — a matching short form fully replaces
+    /// the default group (no merge). Non-matching entries are appended as new groups.
     pub fn patch(&self, overrides: &crate::config::DictOverrides) -> Self {
         let mut groups = self.groups.clone();
 
-        // Remove phase: remove groups where any value matches
+        // Remove phase: remove groups where any value matches (case-insensitive)
         if !overrides.remove.is_empty() {
             let remove_set: std::collections::HashSet<String> = overrides.remove.iter()
                 .map(|v| v.to_uppercase())
@@ -231,73 +234,22 @@ impl AbbrTable {
             groups.retain(|g| {
                 !remove_set.contains(&g.short)
                     && !remove_set.contains(&g.long)
-                    && !g.variants.iter().any(|v| remove_set.contains(v))
+                    && !g.variants.iter().any(|v| remove_set.contains(&v.to_uppercase()))
             });
         }
 
-        // Add/merge phase: process `add` entries
-        let add_iter = overrides.add.iter().map(|e| (e, e.canonical.unwrap_or(false)));
-
-        for (entry, is_canonical) in add_iter {
-            // AbbrGroup::new normalizes short/long to uppercase
-            let normalized = AbbrGroup::new(&entry.short, &entry.long, entry.variants.clone());
-            let short = normalized.short;
-            let long = normalized.long;
-            let new_variants = normalized.variants;
-
-            // Find existing group by canonical short or long (skip empty-string matches)
-            let existing = groups.iter().position(|g| {
-                g.short == short
-                    || (!long.is_empty() && g.short == long)
-                    || (!short.is_empty() && g.long == short)
-                    || (!long.is_empty() && g.long == long)
-            });
-
-            if let Some(idx) = existing {
-                let group = &mut groups[idx];
-                // Merge variants
-                for v in &new_variants {
-                    if *v != group.short && *v != group.long && !group.variants.contains(v) {
-                        group.variants.push(v.clone());
-                    }
-                }
-                if is_canonical {
-                    // Canonical entries replace tags entirely
-                    group.tags = entry.tags.iter().map(|t| t.to_uppercase()).collect();
-                } else if !entry.tags.is_empty() {
-                    // Non-canonical entries merge tags additively
-                    for t in &entry.tags {
-                        let upper = t.to_uppercase();
-                        if !group.tags.contains(&upper) {
-                            group.tags.push(upper);
-                        }
-                    }
-                }
-                if is_canonical {
-                    // Demote old canonical short to variant (if different from new)
-                    if group.short != short {
-                        let old_short = group.short.clone();
-                        if !group.variants.contains(&old_short) {
-                            group.variants.push(old_short);
-                        }
-                        group.short = short;
-                    }
-                    if group.long != long {
-                        let old_long = group.long.clone();
-                        if !group.variants.contains(&old_long) {
-                            group.variants.push(old_long);
-                        }
-                        group.long = long;
-                    }
-                }
+        // Add/replace phase: matching short form fully replaces the default group
+        for entry in &overrides.add {
+            let new_group = AbbrGroup {
+                short: entry.short.to_uppercase(),
+                long: entry.long.to_uppercase(),
+                variants: entry.variants.clone(),
+                tags: entry.tags.clone(),
+            };
+            if let Some(idx) = groups.iter().position(|g| g.short == new_group.short) {
+                groups[idx] = new_group;
             } else {
-                // New group
-                groups.push(AbbrGroup {
-                    short: short.to_uppercase(),
-                    long: long.to_uppercase(),
-                    variants: new_variants,
-                    tags: entry.tags.iter().map(|t| t.to_uppercase()).collect(),
-                });
+                groups.push(new_group);
             }
         }
 
@@ -635,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_add_variant_to_existing_group() {
+    fn test_patch_replace_existing_group() {
         use crate::config::{DictEntry, DictOverrides};
         let table = AbbrTable::from_groups(vec![
             AbbrGroup::new("NE", "NORTHEAST", vec![]),
@@ -644,36 +596,38 @@ mod tests {
             add: vec![DictEntry {
                 short: "NE".into(), long: "NORTHEAST".into(),
                 variants: vec!["N E".into(), "NEAST".into()],
-                canonical: None,
-                ..Default::default()
+                tags: vec!["direction".into()],
             }],
             remove: vec![],
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.standardize("N E"), Some((0, "NE", "NORTHEAST")));
         assert_eq!(patched.standardize("NEAST"), Some((0, "NE", "NORTHEAST")));
+        assert_eq!(patched.groups[0].tags, vec!["direction"]);
     }
 
     #[test]
-    fn test_patch_canonical_override_demotes_old() {
+    fn test_patch_replace_drops_old_variants() {
         use crate::config::{DictEntry, DictOverrides};
         let table = AbbrTable::from_groups(vec![
-            AbbrGroup::new("NE", "NORTHEAST", vec![]),
+            AbbrGroup {
+                short: "NE".into(), long: "NORTHEAST".into(),
+                variants: vec!["OLD_VARIANT".into()],
+                tags: vec!["old_tag".into()],
+            },
         ]);
         let overrides = DictOverrides {
             add: vec![DictEntry {
-                short: "NEAST".into(), long: "NORTHEAST".into(),
-                variants: vec![],
-                canonical: Some(true),
-                ..Default::default()
+                short: "NE".into(), long: "NORTHEAST".into(),
+                variants: vec!["NEW_VARIANT".into()],
+                tags: vec!["new_tag".into()],
             }],
             remove: vec![],
         };
         let patched = table.patch(&overrides);
-        let result = patched.standardize("NORTHEAST").unwrap();
-        assert_eq!(result.1, "NEAST");
-        // Old short demoted to variant, still findable
-        assert_eq!(patched.standardize("NE").unwrap().1, "NEAST");
+        assert_eq!(patched.standardize("OLD_VARIANT"), None);
+        assert_eq!(patched.standardize("NEW_VARIANT"), Some((0, "NE", "NORTHEAST")));
+        assert_eq!(patched.groups[0].tags, vec!["new_tag"]);
     }
 
     #[test]
@@ -684,7 +638,6 @@ mod tests {
             add: vec![DictEntry {
                 short: "WH".into(), long: "WAREHOUSE".into(),
                 variants: vec!["WHSE".into()],
-                canonical: None,
                 ..Default::default()
             }],
             remove: vec![],
@@ -694,20 +647,80 @@ mod tests {
     }
 
     #[test]
+    fn test_patch_same_long_form_separate_groups() {
+        use crate::config::{DictEntry, DictOverrides};
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup::new("HWY", "HIGHWAY", vec![]),
+        ]);
+        let overrides = DictOverrides {
+            add: vec![DictEntry {
+                short: "GA HWY".into(), long: "HIGHWAY".into(),
+                variants: vec![],
+                tags: vec!["highway".into()],
+            }],
+            remove: vec![],
+        };
+        let patched = table.patch(&overrides);
+        assert!(patched.standardize("HWY").is_some());
+        assert!(patched.standardize("GA HWY").is_some());
+        assert_eq!(patched.groups.len(), 2);
+    }
+
+    #[test]
     fn test_patch_remove_group() {
         use crate::config::{DictEntry, DictOverrides};
-        let _ = DictEntry::default(); // verify Default works
+        let _ = DictEntry::default();
         let table = AbbrTable::from_groups(vec![
             AbbrGroup::new("NE", "NORTHEAST", vec!["N E".into()]),
             AbbrGroup::new("NW", "NORTHWEST", vec![]),
         ]);
         let overrides = DictOverrides {
             add: vec![],
-            remove: vec!["N E".into()], // matches a variant -> removes the whole NE group
+            remove: vec!["N E".into()],
         };
         let patched = table.patch(&overrides);
         assert_eq!(patched.standardize("NE"), None);
         assert_eq!(patched.standardize("NW"), Some((0, "NW", "NORTHWEST")));
+    }
+
+    #[test]
+    fn test_patch_remove_then_add() {
+        use crate::config::{DictEntry, DictOverrides};
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup::new("NE", "NORTHEAST", vec![]),
+        ]);
+        let overrides = DictOverrides {
+            add: vec![DictEntry {
+                short: "NE".into(), long: "NORTHEAST".into(),
+                variants: vec!["NEAST".into()],
+                tags: vec!["custom".into()],
+            }],
+            remove: vec!["NE".into()],
+        };
+        let patched = table.patch(&overrides);
+        assert_eq!(patched.standardize("NE"), Some((0, "NE", "NORTHEAST")));
+        assert_eq!(patched.groups[0].tags, vec!["custom"]);
+    }
+
+    #[test]
+    fn test_patch_tags_preserved_exactly() {
+        use crate::config::{DictEntry, DictOverrides};
+        let table = AbbrTable::from_groups(vec![
+            AbbrGroup {
+                short: "MT".into(), long: "MOUNT".into(),
+                variants: vec![], tags: vec!["start".into()],
+            },
+        ]);
+        let overrides = DictOverrides {
+            add: vec![DictEntry {
+                short: "MT".into(), long: "MOUNT".into(),
+                variants: vec![],
+                ..Default::default()
+            }],
+            remove: vec![],
+        };
+        let patched = table.patch(&overrides);
+        assert!(patched.groups[0].tags.is_empty());
     }
 
     #[test]

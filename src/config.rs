@@ -181,8 +181,6 @@ pub struct DictEntry {
     pub long: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub canonical: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
 }
@@ -253,7 +251,7 @@ mod tests {
         config.dictionaries.insert("unit_type".to_string(), DictOverrides {
             add: vec![
                 DictEntry { short: "WH".into(), long: "WAREHOUSE".into(), ..Default::default() },
-                DictEntry { short: "STE".into(), long: "SUITE NUMBER".into(), canonical: Some(true), ..Default::default() },
+                DictEntry { short: "STE".into(), long: "SUITE NUMBER".into(), ..Default::default() },
             ],
             remove: vec![],
         });
@@ -340,5 +338,20 @@ skip_if_filled = true
             ..Default::default()
         }];
         assert!(!sc.is_empty());
+    }
+
+    #[test]
+    fn test_canonical_field_ignored_on_load() {
+        let toml_str = r#"
+[[dictionaries.suffix.add]]
+short = "AVE"
+long = "AVENUE"
+canonical = true
+tags = ["common"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let entry = &config.dictionaries.get("suffix").unwrap().add[0];
+        assert_eq!(entry.short, "AVE");
+        assert_eq!(entry.tags, vec!["common"]);
     }
 }

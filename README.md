@@ -64,7 +64,7 @@ cat addresses.txt | addrust parse --format tsv
 ```sh
 addrust list steps              # all steps with enabled/disabled status
 addrust list tables             # all dictionary tables
-addrust list tables suffix_all  # entries in a specific table
+addrust list tables suffix      # entries in a specific table
 ```
 
 ## Configuration
@@ -87,7 +87,7 @@ addrust --config path/to/config.toml parse
 ```toml
 [steps]
 disabled = ["po_box", "ordinal_to_word"]
-step_order = ["na_check", "city_state_zip", "suffix_common", "po_box"]
+step_order = ["na_check", "city_state_zip", "suffix_common", "suffix_all", "po_box"]
 ```
 
 Steps not listed in `step_order` are appended in their default order.
@@ -99,7 +99,7 @@ Steps not listed in `step_order` are appended in their default order.
 type = "extract"
 label = "my_custom_step"
 pattern = '\bBOX (\d+)'
-target = "po_box"
+output_col = "po_box"
 skip_if_filled = true
 ```
 
@@ -108,7 +108,7 @@ skip_if_filled = true
 Add entries, add variants to existing entries, or remove entries from any built-in table:
 
 ```toml
-[dictionaries.suffix_all]
+[dictionaries.suffix]
 add = [
     { short = "PSGE", long = "PASSAGE" },
 ]

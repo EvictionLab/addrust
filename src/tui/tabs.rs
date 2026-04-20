@@ -262,14 +262,12 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         }
         // Add new entry via panel
         KeyCode::Char('a') => {
-            let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
             app.panel = Some(super::panel::PanelKind::Dict(super::panel::DictPanelState {
                 entry_index: app.current_dict_entries().len(),
                 short: String::new(),
                 long: String::new(),
                 variants: vec![],
                 tags: vec![],
-                has_tags,
                 field_cursor: 0,
                 focus: super::panel::PanelFocus::InlineEdit { cursor: 0, buffer: String::new() },
                 is_new: true,
@@ -314,7 +312,6 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         // Open dict panel
         KeyCode::Enter => {
             if let Some(i) = app.dict_list_state.selected() {
-                let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
                 let entry = &app.current_dict_entries()[i];
                 let variants: Vec<(String, bool)> = entry.variants.iter()
                     .map(|v| (v.clone(), true))
@@ -328,7 +325,6 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                     long: entry.long.clone(),
                     variants,
                     tags,
-                    has_tags,
                     field_cursor: 0,
                     focus: super::panel::PanelFocus::Navigating,
                     is_new: false,
@@ -338,7 +334,6 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
         // Edit entry via panel, focused on long form
         KeyCode::Char('e') => {
             if let Some(i) = app.dict_list_state.selected() {
-                let has_tags = app.current_dict_entries().iter().any(|e| !e.tags.is_empty());
                 let entry = &app.current_dict_entries()[i];
                 if entry.status != GroupStatus::Removed {
                     let variants: Vec<(String, bool)> = entry.variants.iter()
@@ -354,7 +349,6 @@ pub(crate) fn handle_dict_key(app: &mut App, code: KeyCode) {
                         long: entry.long.clone(),
                         variants,
                         tags,
-                        has_tags,
                         field_cursor: 1,
                         focus: super::panel::PanelFocus::InlineEdit { cursor, buffer: entry.long.clone() },
                         is_new: false,
@@ -579,106 +573,51 @@ pub(crate) fn render_dict(frame: &mut Frame, app: &mut App, area: Rect) {
     // Check if this is a value-list table (cached at startup)
     let is_value_list = app.dict_is_value_list[app.dict_tab_index];
 
-    let has_tags = {
-        let entries = app.current_dict_entries();
-        entries.iter().any(|e| !e.tags.is_empty())
-    };
-
-    // Build table rows from entries
-    let rows: Vec<Row> = {
-        let entries = app.current_dict_entries();
-
-        entries
-            .iter()
-            .map(|e| {
-                let style = match e.status {
-                    GroupStatus::Default => Style::new(),
-                    GroupStatus::Added => Style::new().fg(Color::Green),
-                    GroupStatus::Removed => Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT),
-                    GroupStatus::Modified => Style::new().fg(Color::Yellow),
-                };
-                let check = match e.status {
-                    GroupStatus::Removed => Cell::from(Span::styled("✗", Style::new().fg(Color::Red))),
-                    _ => Cell::from(Span::styled("✓", Style::new().fg(Color::Green))),
-                };
-                let variants_str = if e.variants.is_empty() {
-                    String::new()
-                } else {
-                    e.variants.join(", ")
-                };
-                if has_tags {
-                    let tags_str = e.tags.join(", ");
-                    if is_value_list {
-                        Row::new(vec![
-                            check,
-                            Cell::from(e.short.clone()).style(style),
-                            Cell::from("".to_string()),
-                            Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
-                            Cell::from(tags_str).style(Style::new().fg(Color::Cyan)),
-                        ])
-                    } else {
-                        Row::new(vec![
-                            check,
-                            Cell::from(e.short.clone()).style(style),
-                            Cell::from(e.long.clone()).style(style),
-                            Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
-                            Cell::from(tags_str).style(Style::new().fg(Color::Cyan)),
-                        ])
-                    }
-                } else if is_value_list {
-                    Row::new(vec![
-                        check,
-                        Cell::from(e.short.clone()).style(style),
-                        Cell::from("".to_string()),
-                        Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
-                    ])
-                } else {
-                    Row::new(vec![
-                        check,
-                        Cell::from(e.short.clone()).style(style),
-                        Cell::from(e.long.clone()).style(style),
-                        Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
-                    ])
-                }
-            })
-            .collect()
-    };
+    let rows: Vec<Row> = app.current_dict_entries()
+        .iter()
+        .map(|e| {
+            let style = match e.status {
+                GroupStatus::Default => Style::new(),
+                GroupStatus::Added => Style::new().fg(Color::Green),
+                GroupStatus::Removed => Style::new().fg(Color::Red).add_modifier(Modifier::CROSSED_OUT),
+                GroupStatus::Modified => Style::new().fg(Color::Yellow),
+            };
+            let check = match e.status {
+                GroupStatus::Removed => Cell::from(Span::styled("✗", Style::new().fg(Color::Red))),
+                _ => Cell::from(Span::styled("✓", Style::new().fg(Color::Green))),
+            };
+            let variants_str = if e.variants.is_empty() { String::new() } else { e.variants.join(", ") };
+            let long_cell = if is_value_list {
+                Cell::from(String::new())
+            } else {
+                Cell::from(e.long.clone()).style(style)
+            };
+            Row::new(vec![
+                check,
+                Cell::from(e.short.clone()).style(style),
+                long_cell,
+                Cell::from(variants_str).style(Style::new().fg(Color::DarkGray)),
+                Cell::from(e.tags.join(", ")).style(Style::new().fg(Color::Cyan)),
+            ])
+        })
+        .collect();
 
     let table_name = &app.table_names[app.dict_tab_index];
 
-    let (widths, header) = if has_tags {
-        (
-            vec![
-                Constraint::Length(1),    // check
-                Constraint::Length(12),   // short
-                Constraint::Length(20),   // long
-                Constraint::Fill(1),      // variants
-                Constraint::Length(12),   // tags
-            ],
-            Row::new(vec![
-                Cell::from(""),
-                Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
-                Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
-                Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
-                Cell::from("Tags").style(Style::new().add_modifier(Modifier::BOLD)),
-            ]).style(Style::new().fg(Color::Cyan)),
-        )
-    } else {
-        (
-            vec![
-                Constraint::Length(1),    // check
-                Constraint::Length(12),   // short
-                Constraint::Length(20),   // long
-                Constraint::Fill(1),      // variants
-            ],
-            Row::new(vec![
-                Cell::from(""),
-                Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
-                Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
-                Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
-            ]).style(Style::new().fg(Color::Cyan)),
-        )
-    };
+    let widths = vec![
+        Constraint::Length(1),    // check
+        Constraint::Length(12),   // short
+        Constraint::Length(20),   // long
+        Constraint::Fill(1),      // variants
+        Constraint::Length(12),   // tags
+    ];
+    let header = Row::new(vec![
+        Cell::from(""),
+        Cell::from("Short").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Long").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Variants").style(Style::new().add_modifier(Modifier::BOLD)),
+        Cell::from("Tags").style(Style::new().add_modifier(Modifier::BOLD)),
+    ]).style(Style::new().fg(Color::Cyan));
 
     let table_widget = Table::new(rows, widths)
         .block(Block::bordered().title(format!("{} entries", table_name)))
