@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Paragraph, Tabs};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{Config, DictEntry, DictOverrides};
-use crate::tables::abbreviations::load_default_tables;
+use crate::tables::abbreviations::{AbbrGroup, load_default_tables};
 
 use tabs::{
     DictGroupState, GroupStatus, OutputSettingState, StepState,
@@ -168,76 +168,55 @@ impl App {
                 let default_table = default_tables.get(name).unwrap();
                 let overrides = config.dictionaries.get(name);
 
-                // Build default lookup: short -> group
-                let default_map: std::collections::HashMap<&str, &crate::tables::abbreviations::AbbrGroup> =
-                    default_table.groups.iter()
-                        .map(|g| (g.short.as_str(), g))
-                        .collect();
+                let default_map: HashMap<&str, &AbbrGroup> = default_table.groups.iter()
+                    .map(|g| (g.short.as_str(), g))
+                    .collect();
 
-                // Patch defaults with config overrides
                 let patched = match overrides {
                     Some(ov) => default_table.patch(ov),
                     None => default_table.clone(),
                 };
 
-                // Build entries with status from patched table
                 let mut entries: Vec<DictGroupState> = patched.groups.iter()
                     .map(|g| {
-                        let (status, orig_short, orig_long, orig_variants, orig_tags) =
-                            if let Some(default_group) = default_map.get(g.short.as_str()) {
-                                // Exists in defaults — check if identical
-                                let is_same = g.long == default_group.long
-                                    && g.variants == default_group.variants
-                                    && g.tags == default_group.tags;
-                                if is_same {
-                                    (GroupStatus::Default,
-                                     default_group.short.clone(), default_group.long.clone(),
-                                     default_group.variants.clone(), default_group.tags.clone())
-                                } else {
-                                    (GroupStatus::Modified,
-                                     default_group.short.clone(), default_group.long.clone(),
-                                     default_group.variants.clone(), default_group.tags.clone())
-                                }
-                            } else {
-                                // Not in defaults — added by config
-                                (GroupStatus::Added,
-                                 g.short.clone(), g.long.clone(),
-                                 g.variants.clone(), g.tags.clone())
-                            };
-
+                        let default_group = default_map.get(g.short.as_str()).copied();
+                        let status = match default_group {
+                            Some(dg) if dg == g => GroupStatus::Default,
+                            Some(_) => GroupStatus::Modified,
+                            None => GroupStatus::Added,
+                        };
+                        let origin = default_group.unwrap_or(g);
                         DictGroupState {
                             short: g.short.clone(),
                             long: g.long.clone(),
                             variants: g.variants.clone(),
                             tags: g.tags.clone(),
                             status,
-                            original_short: orig_short,
-                            original_long: orig_long,
-                            original_variants: orig_variants,
-                            original_tags: orig_tags,
+                            original_short: origin.short.clone(),
+                            original_long: origin.long.clone(),
+                            original_variants: origin.variants.clone(),
+                            original_tags: origin.tags.clone(),
                         }
                     })
                     .collect();
 
-                // Add removed entries for display (from config remove list vs defaults)
                 if let Some(ov) = overrides {
                     for remove_val in &ov.remove {
                         let upper = remove_val.to_uppercase();
-                        // Find the default group that was removed
-                        if let Some(default_group) = default_table.groups.iter().find(|g| {
+                        if let Some(g) = default_table.groups.iter().find(|g| {
                             g.short == upper || g.long == upper
                                 || g.variants.iter().any(|v| v.to_uppercase() == upper)
                         }) {
                             entries.push(DictGroupState {
-                                short: default_group.short.clone(),
-                                long: default_group.long.clone(),
-                                variants: default_group.variants.clone(),
-                                tags: default_group.tags.clone(),
+                                short: g.short.clone(),
+                                long: g.long.clone(),
+                                variants: g.variants.clone(),
+                                tags: g.tags.clone(),
                                 status: GroupStatus::Removed,
-                                original_short: default_group.short.clone(),
-                                original_long: default_group.long.clone(),
-                                original_variants: default_group.variants.clone(),
-                                original_tags: default_group.tags.clone(),
+                                original_short: g.short.clone(),
+                                original_long: g.long.clone(),
+                                original_variants: g.variants.clone(),
+                                original_tags: g.tags.clone(),
                             });
                         }
                     }
@@ -703,7 +682,6 @@ mod tests {
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
             assert_eq!(overrides.remove.len(), 1);
-            // Remove now stores the short form (canonical key)
             assert_eq!(overrides.remove[0], app.dict_entries[0][0].short);
         }
     }
@@ -776,7 +754,6 @@ mod tests {
             let config = app.to_config();
             let name = &app.table_names[0];
             let overrides = config.dictionaries.get(name).unwrap();
-            // Modified entries go to add (short-form matching infers replacement vs addition)
             assert_eq!(overrides.add.len(), 1);
             assert_eq!(overrides.add[0].long, "CHANGED");
         }

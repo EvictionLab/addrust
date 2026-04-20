@@ -1093,30 +1093,18 @@ pub(crate) fn handle_dict_panel_key(app: &mut App, code: KeyCode) {
     }
 }
 
-/// Check if short or long form collides with another entry in the table.
-/// Returns an error message if there's a collision, None if OK.
-/// `exclude_index` is the index of the entry being edited (excluded from check).
-fn check_dict_duplicates(
+fn dict_entry_collides(
     entries: &[super::tabs::DictGroupState],
     short: &str,
     long: &str,
     exclude_index: Option<usize>,
-) -> Option<String> {
-    for (i, e) in entries.iter().enumerate() {
-        if Some(i) == exclude_index {
-            continue;
-        }
-        if e.status == super::tabs::GroupStatus::Removed {
-            continue;
-        }
-        if !short.is_empty() && e.short == short {
-            return Some(format!("Short form '{}' already exists in this table", short));
-        }
-        if !long.is_empty() && e.long == long {
-            return Some(format!("Long form '{}' already exists in this table", long));
-        }
-    }
-    None
+) -> bool {
+    entries.iter().enumerate().any(|(i, e)| {
+        Some(i) != exclude_index
+            && e.status != super::tabs::GroupStatus::Removed
+            && ((!short.is_empty() && e.short == short)
+                || (!long.is_empty() && e.long == long))
+    })
 }
 
 fn close_dict_panel(app: &mut App) {
@@ -1141,18 +1129,13 @@ fn close_dict_panel(app: &mut App) {
         _ => return,
     };
 
-    // Check for duplicate short/long forms
     let exclude = if is_new { None } else { Some(entry_index) };
-    let short_upper = short.to_uppercase();
-    let long_upper = long.to_uppercase();
-    if let Some(_err_msg) = check_dict_duplicates(
+    if dict_entry_collides(
         app.current_dict_entries(),
-        &short_upper,
-        &long_upper,
+        &short.to_uppercase(),
+        &long.to_uppercase(),
         exclude,
     ) {
-        // TODO: display error via status bar (issue #2)
-        // For now, just don't save
         app.panel = None;
         return;
     }

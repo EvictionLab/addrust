@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// A group of abbreviation variants with one canonical short/long pair.
 /// Short and long are always stored uppercase. Variants are stored as-is
 /// (they may contain regex patterns where case matters).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbbrGroup {
     pub short: String,
     pub long: String,
@@ -238,27 +238,18 @@ impl AbbrTable {
             });
         }
 
-        // Add/replace phase
+        // Add/replace phase: matching short form fully replaces the default group
         for entry in &overrides.add {
-            let short = entry.short.to_uppercase();
-            let long = entry.long.to_uppercase();
-
-            // Replace existing group with matching short form
-            if let Some(idx) = groups.iter().position(|g| g.short == short) {
-                groups[idx] = AbbrGroup {
-                    short,
-                    long,
-                    variants: entry.variants.clone(),
-                    tags: entry.tags.clone(),
-                };
+            let new_group = AbbrGroup {
+                short: entry.short.to_uppercase(),
+                long: entry.long.to_uppercase(),
+                variants: entry.variants.clone(),
+                tags: entry.tags.clone(),
+            };
+            if let Some(idx) = groups.iter().position(|g| g.short == new_group.short) {
+                groups[idx] = new_group;
             } else {
-                // New group
-                groups.push(AbbrGroup {
-                    short,
-                    long,
-                    variants: entry.variants.clone(),
-                    tags: entry.tags.clone(),
-                });
+                groups.push(new_group);
             }
         }
 
@@ -606,7 +597,6 @@ mod tests {
                 short: "NE".into(), long: "NORTHEAST".into(),
                 variants: vec!["N E".into(), "NEAST".into()],
                 tags: vec!["direction".into()],
-                ..Default::default()
             }],
             remove: vec![],
         };
@@ -631,7 +621,6 @@ mod tests {
                 short: "NE".into(), long: "NORTHEAST".into(),
                 variants: vec!["NEW_VARIANT".into()],
                 tags: vec!["new_tag".into()],
-                ..Default::default()
             }],
             remove: vec![],
         };
@@ -668,7 +657,6 @@ mod tests {
                 short: "GA HWY".into(), long: "HIGHWAY".into(),
                 variants: vec![],
                 tags: vec!["highway".into()],
-                ..Default::default()
             }],
             remove: vec![],
         };
@@ -706,7 +694,6 @@ mod tests {
                 short: "NE".into(), long: "NORTHEAST".into(),
                 variants: vec!["NEAST".into()],
                 tags: vec!["custom".into()],
-                ..Default::default()
             }],
             remove: vec!["NE".into()],
         };
