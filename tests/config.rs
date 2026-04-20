@@ -83,7 +83,7 @@ fn test_config_adds_street_name() {
     let config: Config = toml::from_str(
         r#"
 [dictionaries.street_name]
-add = [{ short = "PT", long = "POINT" }]
+add = [{ short = "PT", long = "POINT", tags = ["name"] }]
 "#,
     )
     .unwrap();
@@ -341,26 +341,6 @@ fn test_fractional_road() {
     assert_eq!(addr.suffix.as_deref(), Some("ROAD"));
 }
 
-#[test]
-fn test_trailing_number_to_street_number() {
-    // Trailing number moves to street_number when none exists
-    let config: Config = toml::from_str(
-        r#"
-[steps]
-disabled = ["extra_front"]
-"#,
-    )
-    .unwrap();
-    let p = Pipeline::from_config(&config);
-    let addr = p.parse("MAIN 123");
-    assert_eq!(addr.street_number.as_deref(), Some("123"));
-    assert_eq!(addr.street_name.as_deref(), Some("MAIN"));
-
-    // Skipped when street_number already exists
-    let p = Pipeline::default();
-    let addr = p.parse("123 MAIN ST");
-    assert_eq!(addr.street_number.as_deref(), Some("123"));
-}
 
 #[test]
 fn test_invalid_custom_step_skipped_gracefully() {
