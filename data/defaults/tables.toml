@@ -129,6 +129,7 @@ groups = [
   { short = "RTE",        long = "ROUTE",       variants = [], tags = ["highway"] },
   { short = "FM RD",      long = "FARM ROAD",   variants = [], tags = ["highway"] },
   { short = "CO RD",      long = "COUNTY ROAD", variants = [], tags = ["highway"] },
-  { short = "ST RD",      long = "STATE ROAD",  variants = [], tags = ["highway"] },
-  { short = "INTERSTATE", long = "INTERSTATE",  variants = [], tags = ["highway"] },
+  { short = "ST RD",      long = "STATE ROAD",  variants = ["STH"], tags = ["highway"] },
+  { short = "INTERSTATE", long = "INTERSTATE",  variants = ['I(?=\W\d{1,3})'], tags = ["highway"] },
+  { short = "PT",         long = "PORT",        variants = ["PRT"], tags = ["start"] },
 ]
