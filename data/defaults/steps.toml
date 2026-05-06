@@ -17,7 +17,7 @@ replacement = '$1'
 [[step]]
 type = "rewrite"
 label = "period_between"
-pattern = '([^\s])\.([^\s])'
+pattern = '([A-Z0-9])\.([A-Z0-9])'
 replacement = '$1 $2'
 
 [[step]]
@@ -29,20 +29,8 @@ replacement = '$1-$2'
 [[step]]
 type = "rewrite"
 label = "unstick_number_letters"
-pattern = '^(\d+)([A-Z]{2,})'
+pattern = '^(\d+)([A-Z]{2,}|[NSEW])'
 replacement = '$1 $2'
-
-[[step]]
-type = "rewrite"
-label = "stick_dir_number"
-pattern = '^([NSEW]) (\d+)\b'
-replacement = '${1}${2}'
-
-[[step]]
-type = "rewrite"
-label = "pound_ordinal"
-pattern = '#(\d+[RNTS][DHT])'
-replacement = '$1'
 
 [[step]]
 type = "rewrite"
@@ -79,7 +67,7 @@ replacement = ''
 [[step]]
 type = "extract"
 label = "city_state_zip"
-pattern = ',\s*([A-Z][A-Z ]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
+pattern = '(?:^[A-Z][A-Z-]+|,\s*[A-Z][A-Z -]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
 output_col = { city = 1, state = 2, zip = 3 }
 
 # --- PO Box ---
@@ -108,30 +96,61 @@ label = "fractional_road"
 pattern = '(?<!^)\b(\d{1,3})\s+(\d+)/(\d+)\b'
 replacement = '${1:number_cardinal} AND ${2/3:fraction}'
 
+# Must run BEFORE highway_number_to_word so highway-tag variants (e.g.
+# `I` → `INTERSTATE`) are expanded first. Otherwise number_to_word
+# converts the digits and the variant lookahead can't match anymore.
+[[step]]
+type = "rewrite"
+label = "street_name_highway"
+pattern = '\b({street_name:highway})\b'
+table = "street_name"
+
 [[step]]
 type = "rewrite"
 label = "highway_number_to_word"
-pattern = '\b({street_name:highway})\s+(\d{1,3})\b'
+pattern = '\b({street_name:highway})[\s-]+(\d{1,3})\b'
 replacement = '$1 ${2:number_cardinal}'
 
 [[step]]
 type = "rewrite"
 label = "ordinal_to_word"
-pattern = '\b(\d{1,3})(ST|ND|RD|TH)\b'
+pattern = '#?\b(\d{1,3})(ST|ND|RD|TH)\b'
+replacement = '${1:number_ordinal}'
+
+[[step]]
+type = "rewrite"
+label = "ordinal_to_word_no_num"
+pattern = '^(\d{1,3}) (ST|ND|RD|TH)\b(?= (?:{suffix:common})\b)'
 replacement = '${1:number_ordinal}'
 
 # --- Pre-processing rewrites ---
 [[step]]
 type = "rewrite"
 label = "unstick_suffix_unit"
-pattern = '\b({suffix:common})({unit_type})\b'
+pattern = '\b({suffix:common})({unit_type}|\d)\b'
 replacement = '$1 $2'
 
+[[step]]
+type = "rewrite"
+label = "unstick_unit_type_unit"
+pattern = '\b({unit_type})(\d+)'
+replacement = '$1 $2'
+
+[[step]]
+type = "rewrite"
+label = "dedupe_word"
+pattern = '\b({suffix}|{direction}) \1\b'
+replacement = '$1'
+
 # --- Extra front ---
+# Leading `(?!{direction}\s)` keeps a leading direction-letter from being
+# captured here so coord/pre_direction can claim it. Two-alternative form
+# (direction-then-digit case first) prevents greedy matching of `\d`
+# from swallowing a trailing direction letter inside the prefix.
 [[step]]
 type = "extract"
 label = "extra_front"
-pattern = '^(?:(?:[A-Z\W]+\s)+(?=(?:{direction})\s\d))|^(?:(?:[A-Z\W]+\s)+(?=\d))'
+pattern = '^(?!{direction}\s)(?:(?:[A-Z\W]+\s)+(?=(?:{direction})\s\d))|^(?!{direction}\s)(?:(?:[A-Z\W]+\s)+(?=\d))'
 output_col = "extra_front"
 skip_if_filled = true
 
@@ -142,7 +161,16 @@ label = "street_number_coords"
 pattern = '^([NSEW])\W?(\d+)\W?([NSEW])\W?(\d+)\b'
 output_col = "street_number"
 skip_if_filled = true
-replacement = '${1}${2} ${3}${4}'
+replacement = '$1$2 $3$4'
+
+# Single-pair coord (e.g. `N 123 MAIN ST` → street_number `N123`).
+[[step]]
+type = "extract"
+label = "street_number_coord"
+pattern = '^([NSEW])\W?(\d+)\b'
+output_col = "street_number"
+skip_if_filled = true
+replacement = '$1$2'
 
 [[step]]
 type = "extract"
@@ -170,7 +198,7 @@ skip_if_filled = true
 [[step]]
 type = "extract"
 label = "unit_type_value"
-pattern = '(\b(?:{unit_type})\b|#)\W*(\d+-\d+[A-Z]?|[A-Z]{1,2}\W*\d+|\d+\W?[A-Z0-9]?|[A-Z]{1,2}-\d+|\d+|[A-Z])\s*$'
+pattern = '(\b(?:{unit_type})\b|#)\W*(\d+-\d+[A-Z]?|[A-Z]{1,2}\W*\d+|\d+\W?[A-Z0-9]?|\d[A-Z]\d+|[A-Z]{1,2}-\d+|\d+|[A-Z])\s*$'
 output_col = { unit_type = 1, unit = 2 }
 skip_if_filled = true
 
@@ -178,6 +206,16 @@ skip_if_filled = true
 type = "extract"
 label = "unit_location"
 pattern = '\b({unit_location})\s*$'
+output_col = "unit"
+skip_if_filled = true
+
+# Catches bare trailing units like `MAIN ST 5B` (no UNIT/APT prefix).
+# The trailing `[A-DF-MO-RT-VX-Z]` is `[A-Z]` minus N/S/E/W so a single-
+# letter post-direction isn't stolen by this step.
+[[step]]
+type = "extract"
+label = "unit_bare"
+pattern = '\b([A-Z]{1,2}-?\d+|\d+-?[A-Z]|\d[A-Z]\d+|\d+|ADJ?|[A-DF-MO-RT-VX-Z])$'
 output_col = "unit"
 skip_if_filled = true
 
@@ -215,6 +253,12 @@ skip_if_filled = true
 # --- Street name cleanup ---
 [[step]]
 type = "rewrite"
+label = "street_name_squish"
+pattern = '^(O|MC) ([A-Z]{3,})'
+replacement = '$1$2'
+
+[[step]]
+type = "rewrite"
 label = "street_name_start"
 pattern = '^({street_name:start})\b'
 table = "street_name"
@@ -223,12 +267,6 @@ table = "street_name"
 type = "rewrite"
 label = "street_name_name"
 pattern = '\b({street_name:name})\b'
-table = "street_name"
-
-[[step]]
-type = "rewrite"
-label = "street_name_highway"
-pattern = '\b({street_name:highway})\b'
 table = "street_name"
 
 # --- Post-extraction cleanup ---
