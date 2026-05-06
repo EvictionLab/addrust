@@ -95,28 +95,6 @@ impl AbbrTable {
         None
     }
 
-    /// All matchable values (canonical shorts + longs + variants), deduped, sorted longest-first.
-    /// Regex variants included as-is (not escaped). Literals are plain strings.
-    pub fn all_match_values(&self) -> Vec<&str> {
-        let mut seen = std::collections::HashSet::new();
-        let mut values = Vec::new();
-        for group in &self.groups {
-            if seen.insert(group.short.as_str()) {
-                values.push(group.short.as_str());
-            }
-            if seen.insert(group.long.as_str()) {
-                values.push(group.long.as_str());
-            }
-            for v in &group.variants {
-                if seen.insert(v.as_str()) {
-                    values.push(v.as_str());
-                }
-            }
-        }
-        values.sort_by_key(|b| std::cmp::Reverse(b.len()));
-        values
-    }
-
     /// True when all long forms are empty — a value-list table (not a short↔long mapping).
     pub fn is_value_list(&self) -> bool {
         !self.groups.is_empty() && self.groups.iter().all(|g| g.long.is_empty())
@@ -153,9 +131,10 @@ impl AbbrTable {
             .collect()
     }
 
-    /// Bounded regex from all match values (used by pattern expansion).
-    pub fn bounded_regex(&self) -> String {
-        let values = self.all_match_values();
+    /// Bounded regex from all match values (short + long + variants), optionally
+    /// filtered by tag. Empties are skipped.
+    pub fn bounded_regex(&self, tag: Option<&str>) -> String {
+        let values = self.all_values(tag);
         let parts: Vec<String> = values.iter().map(|v| {
             if has_regex_chars(v) {
                 v.to_string()
@@ -166,10 +145,24 @@ impl AbbrTable {
         format!(r"(?:{})", parts.join("|"))
     }
 
-    /// Only the short column values, sorted by length descending.
+    /// Only the short column values, sorted by length descending. Empties skipped.
     pub fn short_values(&self) -> Vec<&str> {
+        self.column_values(None, |g| g.short.as_str())
+    }
+
+    /// Only the long column values, sorted by length descending. Empties skipped
+    /// (relevant for na-style tables where all longs are empty).
+    pub fn long_values(&self) -> Vec<&str> {
+        self.column_values(None, |g| g.long.as_str())
+    }
+
+    /// Column values from one column (chosen by `pick`), optionally filtered by tag,
+    /// deduped, longest-first, empties skipped.
+    pub fn column_values(&self, tag: Option<&str>, pick: impl Fn(&AbbrGroup) -> &str) -> Vec<&str> {
         let mut vals: Vec<&str> = self.groups.iter()
-            .map(|g| g.short.as_str())
+            .filter(|g| tag.is_none_or(|t| g.tags.iter().any(|gt| gt == t)))
+            .map(pick)
+            .filter(|s| !s.is_empty())
             .collect();
         vals.sort_unstable();
         vals.dedup();
@@ -177,46 +170,28 @@ impl AbbrTable {
         vals
     }
 
-    /// All unique values (short + long + variants), sorted by length descending.
-    /// Used to build alternation regex patterns. Skips empty strings.
-    pub fn all_values(&self) -> Vec<&str> {
-        // Delegate to all_match_values, filtering empty strings
-        self.all_match_values().into_iter().filter(|v| !v.is_empty()).collect()
-    }
-
-    /// Groups that have a specific tag.
-    pub fn groups_with_tag(&self, tag: &str) -> Vec<&AbbrGroup> {
-        self.groups.iter().filter(|g| g.tags.contains(&tag.to_string())).collect()
-    }
-
-    /// All unique values from groups matching a tag, sorted longest-first.
-    /// Skips empty strings.
-    pub fn all_values_with_tag(&self, tag: &str) -> Vec<&str> {
+    /// All unique values (short + long + variants), sorted by length descending,
+    /// optionally filtered by tag. Empties skipped.
+    pub fn all_values(&self, tag: Option<&str>) -> Vec<&str> {
         let mut seen = std::collections::HashSet::new();
         let mut values = Vec::new();
         for group in &self.groups {
-            if !group.tags.contains(&tag.to_string()) { continue; }
-            if seen.insert(group.short.as_str()) { values.push(group.short.as_str()); }
-            if seen.insert(group.long.as_str()) { values.push(group.long.as_str()); }
+            if !tag.is_none_or(|t| group.tags.iter().any(|gt| gt == t)) {
+                continue;
+            }
+            for v in [group.short.as_str(), group.long.as_str()] {
+                if !v.is_empty() && seen.insert(v) {
+                    values.push(v);
+                }
+            }
             for v in &group.variants {
-                if seen.insert(v.as_str()) { values.push(v.as_str()); }
+                if !v.is_empty() && seen.insert(v.as_str()) {
+                    values.push(v.as_str());
+                }
             }
         }
         values.sort_by_key(|v| std::cmp::Reverse(v.len()));
-        values.into_iter().filter(|v| !v.is_empty()).collect()
-    }
-
-    /// Bounded regex from values matching a tag.
-    pub fn bounded_regex_with_tag(&self, tag: &str) -> String {
-        let values = self.all_values_with_tag(tag);
-        let parts: Vec<String> = values.iter().map(|v| {
-            if has_regex_chars(v) {
-                v.to_string()
-            } else {
-                fancy_regex::escape(v).to_string()
-            }
-        }).collect();
-        format!(r"(?:{})", parts.join("|"))
+        values
     }
 
     /// Apply dictionary overrides: remove matching groups, then replace or add.
@@ -437,7 +412,7 @@ mod tests {
             ("NULL", ""),
             ("NAN", ""),
         ]);
-        let vals = table.all_values();
+        let vals = table.all_values(None);
         assert!(vals.contains(&"NULL"));
         assert!(vals.contains(&"NAN"));
         assert!(!vals.contains(&""));
@@ -448,7 +423,7 @@ mod tests {
         let tables = load_default_tables();
         let na = tables.get("na_values").unwrap();
         assert!(na.is_value_list());
-        let vals = na.all_values();
+        let vals = na.all_values(None);
         assert!(vals.contains(&"NULL"));
         assert!(vals.contains(&"NO ADDRESS"));
     }
@@ -570,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_match_values() {
+    fn test_all_values_unfiltered() {
         let table = AbbrTable::from_groups(vec![
             AbbrGroup {
                 short: "AVE".into(),
@@ -579,7 +554,7 @@ mod tests {
                 tags: vec![],
             },
         ]);
-        let values = table.all_match_values();
+        let values = table.all_values(None);
         // Should contain canonical short, long, and variants — sorted longest first
         assert!(values[0] == "AVENUE"); // longest
         assert!(values.contains(&"AVE"));
@@ -770,7 +745,7 @@ groups = [
 
         let na = tables.get("na_values").unwrap();
         assert!(na.is_value_list());
-        assert!(na.all_values().contains(&"NULL"));
+        assert!(na.all_values(None).contains(&"NULL"));
     }
 
     #[test]
@@ -792,10 +767,7 @@ groups = [
         assert_eq!(suffix.to_long("BLVD"), Some("BOULEVARD"));
 
         // Tag filtering works
-        let common_groups = suffix.groups_with_tag("common");
-        assert_eq!(common_groups.len(), 2);
-
-        let common_values = suffix.all_values_with_tag("common");
+        let common_values = suffix.all_values(Some("common"));
         assert!(common_values.contains(&"AVENUE"));
         assert!(common_values.contains(&"BOULEVARD"));
         assert!(!common_values.contains(&"STRAVENUE"));

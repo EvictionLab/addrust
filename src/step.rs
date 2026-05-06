@@ -36,32 +36,20 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
 
         // Parse placeholder: "table_name", "table_name$accessor",
         // "table_name:tag", "table_name:tag$accessor"
-        let (table_and_tag, accessor) = if let Some(idx) = placeholder.find('$') {
-            (&placeholder[..idx], Some(&placeholder[idx + 1..]))
-        } else {
-            (placeholder.as_str(), None)
+        let (table_and_tag, accessor) = match placeholder.split_once('$') {
+            Some((t, a)) => (t, Some(a)),
+            None => (placeholder.as_str(), None),
         };
-
-        let (table_name, tag_filter) = if let Some(idx) = table_and_tag.find(':') {
-            (&table_and_tag[..idx], Some(&table_and_tag[idx + 1..]))
-        } else {
-            (table_and_tag, None)
+        let (table_name, tag_filter) = match table_and_tag.split_once(':') {
+            Some((n, t)) => (n, Some(t)),
+            None => (table_and_tag, None),
         };
 
         if let Some(table) = abbr.get(table_name) {
-            let values = match (tag_filter, accessor) {
-                (Some(tag), Some("short")) => {
-                    // short values filtered by tag
-                    let groups = table.groups_with_tag(tag);
-                    let mut vals: Vec<&str> = groups.iter().map(|g| g.short.as_str()).collect();
-                    vals.sort_unstable();
-                    vals.dedup();
-                    vals.sort_by_key(|b| std::cmp::Reverse(b.len()));
-                    vals.join("|")
-                }
-                (Some(tag), _) => table.bounded_regex_with_tag(tag),
-                (None, Some("short")) => table.short_values().join("|"),
-                (None, _) => table.bounded_regex(),
+            let values = match accessor {
+                Some("short") => table.column_values(tag_filter, |g| g.short.as_str()).join("|"),
+                Some("long")  => table.column_values(tag_filter, |g| g.long.as_str()).join("|"),
+                _             => table.bounded_regex(tag_filter),
             };
             let before = &result[..start];
             let after = &result[end + 1..];
@@ -76,6 +64,40 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
     result
 }
 
+/// Walk a replacement template, calling `on_backref` for `$N` (single-digit
+/// numbered backref) and `on_braced` for `${...}` (anything inside braces).
+/// Anything else is copied through verbatim. Malformed `${...` (no closing
+/// brace) falls through as literal characters.
+fn walk_template(
+    template: &str,
+    mut on_backref: impl FnMut(usize) -> String,
+    mut on_braced: impl FnMut(&str) -> String,
+) -> String {
+    let mut result = String::with_capacity(template.len());
+    let chars: Vec<char> = template.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            if chars[i + 1] == '{' {
+                if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
+                    let inner: String = chars[i + 2..i + 2 + close].iter().collect();
+                    result.push_str(&on_braced(&inner));
+                    i = i + 2 + close + 1;
+                    continue;
+                }
+            } else if chars[i + 1].is_ascii_digit() {
+                let n = (chars[i + 1] as u8 - b'0') as usize;
+                result.push_str(&on_backref(n));
+                i += 2;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+    result
+}
+
 /// Expand a replacement template with capture group backrefs and table lookups.
 ///
 /// Syntax:
@@ -84,35 +106,11 @@ pub fn expand_template(template: &str, abbr: &Abbreviations) -> String {
 /// - `${N:table_name}` — capture group N, looked up in table (via to_long)
 /// - `${N/M:fraction}` — fraction expansion (N=numerator group, M=denominator group)
 pub fn expand_replacement(template: &str, caps: &Captures, tables: &Abbreviations) -> String {
-    let mut result = String::with_capacity(template.len());
-    let chars: Vec<char> = template.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() {
-            if chars[i + 1] == '{' {
-                // ${...} syntax
-                if let Some(close) = chars[i + 2..].iter().position(|&c| c == '}') {
-                    let inner: String = chars[i + 2..i + 2 + close].iter().collect();
-                    result.push_str(&resolve_template_token(&inner, caps, tables));
-                    i = i + 2 + close + 1;
-                    continue;
-                }
-            } else if chars[i + 1].is_ascii_digit() {
-                // $N syntax (single digit)
-                let n = (chars[i + 1] as u8 - b'0') as usize;
-                if let Some(m) = caps.get(n) {
-                    result.push_str(m.as_str());
-                }
-                i += 2;
-                continue;
-            }
-        }
-        result.push(chars[i]);
-        i += 1;
-    }
-
-    result
+    walk_template(
+        template,
+        |n| caps.get(n).map(|m| m.as_str().to_string()).unwrap_or_default(),
+        |inner| resolve_template_token(inner, caps, tables),
+    )
 }
 
 /// Resolve a single template token (the content inside ${...}).
@@ -162,26 +160,14 @@ fn resolve_template_token(token: &str, caps: &Captures, tables: &Abbreviations) 
 /// Expand a simple replacement template using pre-extracted capture groups.
 ///
 /// Supports `$N` syntax only (no `${N:table}` or `${N/M:fraction}`).
-/// Used by extract steps where captures are already collected as strings.
+/// `${...}` braces pass through as literal text — extract steps use
+/// `expand_replacement` if they need table/fraction syntax.
 fn expand_groups(template: &str, groups: &[Option<String>]) -> String {
-    let mut result = String::with_capacity(template.len());
-    let chars: Vec<char> = template.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        if chars[i] == '$' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
-            let n = (chars[i + 1] as u8 - b'0') as usize;
-            if let Some(Some(val)) = groups.get(n) {
-                result.push_str(val);
-            }
-            i += 2;
-        } else {
-            result.push(chars[i]);
-            i += 1;
-        }
-    }
-
-    result
+    walk_template(
+        template,
+        |n| groups.get(n).and_then(|s| s.as_deref()).unwrap_or_default().to_string(),
+        |inner| format!("${{{}}}", inner),
+    )
 }
 
 // ---------------------------------------------------------------------------
