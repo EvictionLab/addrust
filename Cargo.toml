@@ -1,6 +1,6 @@
 [package]
 name = "addrust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["EvictionLab", "Sarah Johnson (sj-io)"]
 description = "A fast, configurable, table-driven address parser for US addresses"
