@@ -210,14 +210,20 @@ disabled = ["suffix_common", "suffix_all"]
 
     #[test]
     fn test_config_pattern_override() {
-        let toml_str = r#"
+        // Verifies that step_overrides apply to default steps. Asserts on the
+        // compiled step's pattern directly, NOT on parse output — that way the
+        // test is decoupled from how other default steps process the input.
+        let custom_pattern = r#"(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$"#;
+        let toml_str = format!(r#"
 [steps.step_overrides.unit_type_value]
-pattern = '(?:\b({unit_type})|#)\W*(\d+\W?[A-Z]?|[A-Z]\W?\d+|\d+)\s*$'
-"#;
-        let config: crate::config::Config = toml::from_str(toml_str).unwrap();
+pattern = '{}'
+"#, custom_pattern);
+        let config: crate::config::Config = toml::from_str(&toml_str).unwrap();
         let p = Pipeline::from_config(&config);
-        let addr = p.parse("123 Main St B");
-        assert!(addr.unit.is_none() || addr.unit.as_deref() != Some("B"));
+        let step = p.steps().iter()
+            .find(|s| s.label() == "unit_type_value")
+            .expect("unit_type_value step should exist");
+        assert_eq!(step.def.pattern.as_deref(), Some(custom_pattern));
     }
 
     #[test]

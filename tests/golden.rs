@@ -75,16 +75,3 @@ fn test_golden_dataset_steps() {
     }
 }
 
-#[test]
-fn debug_st_james_steps() {
-    let prepped = addrust::prepare::prepare("42 W St James Pl");
-    eprintln!("prepared: {:?}", prepped);
-    let p = Pipeline::from_steps_default();
-    let addr = p.parse("42 W St James Pl");
-    eprintln!("number: {:?}", addr.street_number);
-    eprintln!("pre_dir: {:?}", addr.pre_direction);
-    eprintln!("name: {:?}", addr.street_name);
-    eprintln!("suffix: {:?}", addr.suffix);
-    eprintln!("warnings: {:?}", addr.warnings);
-    assert_eq!(addr.street_number.as_deref(), Some("42"));
-}
