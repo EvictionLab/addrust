@@ -7,6 +7,11 @@ pub mod pipeline;
 pub mod prepare;
 pub mod step;
 pub mod tables;
+// `collapsible_match` triggers heavily on the keyboard-handler match/if pattern
+// throughout tabs.rs and panel.rs. The explicit form is clearer than match guards
+// for multi-statement arms. Revisit during the 0.1.5 TUI rewrite.
+#[cfg(feature = "cli")]
+#[allow(clippy::collapsible_match)]
 pub mod tui;
 
 #[cfg(feature = "duckdb")]

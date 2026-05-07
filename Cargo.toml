@@ -10,17 +10,24 @@ repository = "https://github.com/EvictionLab/addrust"
 [dependencies]
 regex = "1"
 fancy-regex = "0.14"
-rayon = "1"
-clap = { version = "4", features = ["derive"] }
+rayon = { version = "1", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
 duckdb = { version = "1.4", optional = true, features = ["bundled"] }
 
 [features]
-default = ["duckdb"]
+default = ["duckdb", "cli", "parallel"]
 duckdb = ["dep:duckdb"]
+cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
+parallel = ["dep:rayon"]
+
+[[bin]]
+name = "addrust"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [[bin]]
 name = "generate-suffixes"

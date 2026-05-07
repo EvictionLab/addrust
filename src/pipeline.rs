@@ -154,10 +154,19 @@ impl Pipeline {
         state.fields
     }
 
-    /// Parse a batch of addresses (parallel with rayon).
+    /// Parse a batch of addresses.
+    ///
+    /// With the default-on `parallel` feature, work is distributed across rayon's
+    /// thread pool. Without the feature, the batch is processed serially — the API
+    /// is unchanged so callers don't need to know which build they're against.
     pub fn parse_batch(&self, inputs: &[&str]) -> Vec<Address> {
-        use rayon::prelude::*;
-        inputs.par_iter().map(|input| self.parse(input)).collect()
+        #[cfg(feature = "parallel")]
+        {
+            use rayon::prelude::*;
+            inputs.par_iter().map(|input| self.parse(input)).collect()
+        }
+        #[cfg(not(feature = "parallel"))]
+        inputs.iter().map(|input| self.parse(input)).collect()
     }
 
     /// After all steps, assign remaining working string to street_name.

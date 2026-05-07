@@ -5,6 +5,17 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- New `cli` feature (default-on) that gates `clap`, `ratatui`, and `crossterm`. Library consumers depending on `addrust` with `default-features = false` no longer compile these crates. The `addrust` CLI binary requires the `cli` feature; `cargo install addrust` and `cargo build` continue to produce it because the feature is on by default.
+- New `parallel` feature (default-on) that gates `rayon`. Library consumers passing `default-features = false` no longer compile rayon. Useful for embedders that already provide their own thread management — for example, the `duckdb-address-standardizer` extension, where DuckDB spawns a separate addrust call per thread and rayon's intra-batch work-stealing isn't on the hot path.
+- The `addrust` binary is now declared explicitly in `Cargo.toml` with `required-features = ["cli"]`. Behavior is unchanged for the default `cargo build` path.
+
+### Changed
+
+- `addrust::tui` module is now gated behind the `cli` feature. Library consumers who do not enable `cli` will not see this module exposed. The `init`, `address`, `config`, `pipeline`, and other core modules remain unconditionally public so library consumers can generate default configs and run the parser without enabling CLI deps.
+- `Pipeline::parse_batch` falls back to a serial iteration when the `parallel` feature is disabled. The signature is unchanged in both builds, so callers don't need to branch on feature flags. Default builds still use rayon.
+
 ## [0.1.1] - 2026-05-05
 
 ### Default pipeline changes

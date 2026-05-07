@@ -65,7 +65,7 @@ impl AbbrTable {
         }
 
         // Sort shortest-first so longest keys are inserted last and win
-        literal_pairs.sort_by(|a, b| a.0.len().cmp(&b.0.len()));
+        literal_pairs.sort_by_key(|p| p.0.len());
         for (value, idx) in literal_pairs {
             if !value.is_empty() {
                 lookup.insert(value, idx);
