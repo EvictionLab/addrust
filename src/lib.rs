@@ -7,6 +7,7 @@ pub mod pipeline;
 pub mod prepare;
 pub mod step;
 pub mod tables;
+#[cfg(feature = "cli")]
 pub mod tui;
 
 #[cfg(feature = "duckdb")]
