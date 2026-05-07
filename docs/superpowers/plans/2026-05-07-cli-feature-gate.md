@@ -380,3 +380,127 @@ Expected: clean tree. `git log` shows the spec commit (`a871fdc`), the implement
 - **No release tag here.** This plan implements the changes that *will* go into 0.1.2, but does not bump `version` in `Cargo.toml` or tag the release. That happens later via the `RELEASING.md` workflow when Sarah is ready to ship.
 - **No tests are added.** A Cargo feature-gate change is a manifest concern; the verification is the build matrix, not unit tests. The existing test suite passing under both default and reduced feature sets is the regression guard.
 - **The `init` simplification is intentionally not in this plan.** It's deferred to 0.1.3, where the tidy-data redesign forces a rewrite of the template anyway. See `project_addrust_roadmap` memory for the deferred follow-up.
+
+---
+
+## Task 5: Gate `rayon` behind a default-on `parallel` feature
+
+**Added 2026-05-07 mid-PR**, after the duckdb-address-standardizer maintainer pointed out that the wrapper doesn't need rayon — DuckDB threads already execute a separate addrust call per thread, so `Pipeline::parse_batch`'s intra-batch work-stealing is unused on the wrapper path. Folded into 0.1.2 because it's the same conceptual scope as the `cli` gate (minimize the wrapper's compile surface).
+
+**Files:**
+- Modify: `Cargo.toml`
+- Modify: `src/pipeline.rs:157-161`
+
+- [ ] **Step 1: Make `rayon` optional and add the `parallel` feature**
+
+In `Cargo.toml`, change:
+
+```toml
+rayon = "1"
+```
+
+to:
+
+```toml
+rayon = { version = "1", optional = true }
+```
+
+In the `[features]` block, change:
+
+```toml
+default = ["duckdb", "cli"]
+duckdb = ["dep:duckdb"]
+cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
+```
+
+to:
+
+```toml
+default = ["duckdb", "cli", "parallel"]
+duckdb = ["dep:duckdb"]
+cli = ["dep:clap", "dep:ratatui", "dep:crossterm"]
+parallel = ["dep:rayon"]
+```
+
+- [ ] **Step 2: Switch `Pipeline::parse_batch` to a feature-gated body**
+
+In `src/pipeline.rs:157-161`, replace:
+
+```rust
+/// Parse a batch of addresses (parallel with rayon).
+pub fn parse_batch(&self, inputs: &[&str]) -> Vec<Address> {
+    use rayon::prelude::*;
+    inputs.par_iter().map(|input| self.parse(input)).collect()
+}
+```
+
+with:
+
+```rust
+/// Parse a batch of addresses.
+///
+/// With the default-on `parallel` feature, work is distributed across rayon's
+/// thread pool. Without the feature, the batch is processed serially — the API
+/// is unchanged so callers don't need to know which build they're against.
+pub fn parse_batch(&self, inputs: &[&str]) -> Vec<Address> {
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        inputs.par_iter().map(|input| self.parse(input)).collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    inputs.iter().map(|input| self.parse(input)).collect()
+}
+```
+
+The signature is preserved. `lib.rs::parse_batch` and `duckdb_io::run_duckdb:168` (the only callers) work uniformly against both bodies.
+
+- [ ] **Step 3: Verify the full build matrix**
+
+Run:
+
+```sh
+cargo build
+cargo test
+cargo build --no-default-features
+cargo build --no-default-features --features duckdb
+cargo build --no-default-features --features cli
+cargo build --no-default-features --features parallel
+cargo test --no-default-features --features duckdb
+cargo test --no-default-features
+cargo build --manifest-path /Users/sj2690/projects/duckdb-address-standardizer/addrust-ffi/Cargo.toml
+cargo clippy --all-targets
+cargo clippy --no-default-features --all-targets
+```
+
+All must succeed.
+
+- [ ] **Step 4: Verify rayon is also absent from the wrapper-style dep tree**
+
+Run:
+
+```sh
+cargo tree --no-default-features --prefix none -e normal | grep -E '^(clap|ratatui|crossterm|rayon) ' | sort -u
+```
+
+Expected: zero output (now including rayon).
+
+Sanity-check that rayon DOES appear when `parallel` is on:
+
+```sh
+cargo tree --no-default-features --features parallel --prefix none -e normal | grep -E '^rayon '
+```
+
+Expected: one line (`rayon v1.x`).
+
+- [ ] **Step 5: Update CHANGELOG**
+
+In `CHANGELOG.md` `## [Unreleased]` section, append a third bullet to `### Added` and a second bullet to `### Changed` for the new gate. (Exact text in the implementation commit.)
+
+- [ ] **Step 6: Commit**
+
+Three commits to keep the story discoverable in the PR history:
+
+1. `docs: extend 0.1.2 spec and plan to include parallel feature` (spec + plan changes)
+2. `feat: gate rayon behind default-on parallel feature` (Cargo.toml + pipeline.rs)
+3. `docs: changelog for parallel feature` (CHANGELOG)
