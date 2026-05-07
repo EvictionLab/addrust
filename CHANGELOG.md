@@ -5,6 +5,8 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-07
+
 ### Added
 
 - New `cli` feature (default-on) that gates `clap`, `ratatui`, and `crossterm`. Library consumers depending on `addrust` with `default-features = false` no longer compile these crates. The `addrust` CLI binary requires the `cli` feature; `cargo install addrust` and `cargo build` continue to produce it because the feature is on by default.
@@ -68,5 +70,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Canonical overrides now replace tags instead of merging (was producing wrong output).
 - `duckdb` is now a default feature. Embedders not wanting DuckDB pulled in should set `default-features = false` (most already do).
 
-[Unreleased]: https://github.com/EvictionLab/addrust/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/EvictionLab/addrust/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/EvictionLab/addrust/releases/tag/v0.1.2
 [0.1.1]: https://github.com/EvictionLab/addrust/releases/tag/v0.1.1
