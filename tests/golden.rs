@@ -75,3 +75,67 @@ fn test_golden_dataset_steps() {
     }
 }
 
+/// Regression test for the city_state_zip extraction. The main golden runner
+/// above intentionally ignores city/state/zip, which let an off-by-one capture-
+/// group bug ship in v0.1.2 (city alternation was non-capturing while
+/// output_col referenced groups 1/2/3). These cases lock in the correct
+/// extraction across the comma-anchored and start-anchored branches.
+#[test]
+fn test_city_state_zip_extraction() {
+    let p = Pipeline::default();
+    let cases = [
+        // (input, expected_city, expected_state, expected_zip)
+        (
+            "123 Main St, Springfield IL 62704",
+            Some("SPRINGFIELD"),
+            Some("IL"),
+            Some("62704"),
+        ),
+        (
+            "MAIN ST, Winston Salem NC 12345",
+            Some("WINSTON SALEM"),
+            Some("NC"),
+            Some("12345"),
+        ),
+        (
+            "WINSTON-SALEM NC 12345",
+            Some("WINSTON-SALEM"),
+            Some("NC"),
+            Some("12345"),
+        ),
+        (
+            "123 Main St, Springfield IL 62704-1234",
+            Some("SPRINGFIELD"),
+            Some("IL"),
+            Some("62704-1234"),
+        ),
+        (
+            "123 Main St, Springfield IL 62704 US",
+            Some("SPRINGFIELD"),
+            Some("IL"),
+            Some("62704"),
+        ),
+    ];
+
+    let mut failures = Vec::new();
+    for (input, want_city, want_state, want_zip) in cases {
+        let addr = p.parse(input);
+        let city = addr.city.as_deref();
+        let state = addr.state.as_deref();
+        let zip = addr.zip.as_deref();
+        if city != want_city || state != want_state || zip != want_zip {
+            failures.push(format!(
+                "input: {:?}\n  city:  got={:?} want={:?}\n  state: got={:?} want={:?}\n  zip:   got={:?} want={:?}",
+                input, city, want_city, state, want_state, zip, want_zip
+            ));
+        }
+    }
+    if !failures.is_empty() {
+        panic!(
+            "\n{} city_state_zip failures:\n\n{}\n",
+            failures.len(),
+            failures.join("\n\n")
+        );
+    }
+}
+
