@@ -64,11 +64,22 @@ pattern = '(?i)^(N\W?A|{na_values})$'
 replacement = ''
 
 # --- City / State / Zip ---
+# Two steps so each branch has its own group-1 city capture. A single
+# alternation with output_col indexes shifts captures off-by-one when only
+# one branch wraps the city in a capture group.
 [[step]]
 type = "extract"
 label = "city_state_zip"
-pattern = '(?:^[A-Z][A-Z-]+|,\s*[A-Z][A-Z -]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
+pattern = ',\s*([A-Z][A-Z -]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
 output_col = { city = 1, state = 2, zip = 3 }
+skip_if_filled = true
+
+[[step]]
+type = "extract"
+label = "city_state_zip_anchored"
+pattern = '^([A-Z][A-Z-]+)\W+({state})\W+(\d{5}(?:\W\d{4})?)(?:\s*US)?$'
+output_col = { city = 1, state = 2, zip = 3 }
+skip_if_filled = true
 
 # --- PO Box ---
 [[step]]
